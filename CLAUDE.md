@@ -1,0 +1,381 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+**Orion** is a real-time AI inference system for video surveillance, specifically designed for geriatric patient monitoring. It operates as a "smart sensor" that observes and reports visual data via structured inference outputs, following the philosophy: **"Orión Ve, No Interpreta"** (Orion Sees, Doesn't Interpret).
+
+### Technology Stack
+
+- **Go 1.x**: Main orchestration, streaming pipeline, control plane, concurrency management
+- **Python 3.x**: ONNX inference workers (YOLO11 person detection)
+- **GStreamer**: Video capture and frame processing from RTSP streams
+- **MQTT**: Event-driven control plane and data distribution
+- **ONNX Runtime**: ML model inference with multi-model support (YOLO320/640)
+- **MsgPack**: High-performance binary serialization for Go-Python IPC (5x faster than JSON+base64)
+
+## Development Commands
+
+### Building and Running
+
+```bash
+# Build the binary
+make build
+
+# Run the service
+make run
+
+# Run with debug logging
+./bin/oriond --debug
+
+# Run with custom config
+./bin/oriond --config path/to/orion.yaml
+```
+
+### Configuration
+
+- Primary config: `config/orion.yaml`
+- MQTT topics:
+  - Control: `care/control/{instance_id}`
+  - Data: `care/inferences/{instance_id}`
+
+### Testing
+
+**Testing Philosophy**: Manual testing with pair-programming approach. No automated test files exist in prototype. The user runs tests manually while you observe and review.
+
+- Integration testing via MQTT control commands
+- Always verify compilation as primary "test"
+
+### Python Environment
+
+```bash
+# Python workers use virtual environment
+# Activated by: models/run_worker.sh
+# Dependencies: worker-catalog/inference-workers/object-detection/peopledetection-worker/requirements.txt
+```
+
+## Architecture: The Big Picture
+
+### Core Design Philosophy
+
+1. **"Complejidad por diseño, no por accidente"** - Attack complexity through architecture, not complicated code
+2. **Pragmatic Performance**: Real-time responsiveness > completeness. Intentional frame dropping, not queuing
+3. **Non-blocking channels**: Drop frames to maintain <2s latency ("Drop frames, never queue")
+4. **Hybrid Go-Python**: Go for orchestration/concurrency, Python for ML inference via subprocess
+5. **MQTT-centric control**: Hot-reload capabilities without service restart
+6. **KISS Auto-Recovery**: One restart attempt only - persistent failures require manual intervention
+
+### Architectural Pattern
+
+**Event-Driven Microkernel with Streaming Pipeline**
+
+```
+RTSP Camera → GStreamer → consumeFrames() → FrameBus (Fan-out)
+                                                                ↓
+                                                    ┌───────────┴──────────┐
+                                                    ↓                      ↓
+                                            Worker 1 (Python)      Worker 2 (Python)
+                                                    ↓                      ↓
+                                              ONNX Inference        ONNX Inference
+                                                    ↓                      ↓
+                                            Results Channel ←──────────────┘
+                                                    ↓
+                                            consumeInferences()
+                                                    ↓
+                                              MQTT Emitter
+```
+
+### Key Components
+
+**Entry Point**: `cmd/oriond/main.go`
+- Simple entry: parses flags (`--config`, `--debug`), sets up logging, signal handling, graceful shutdown
+
+**Core Orchestrator**: `internal/core/orion.go`
+- Manages lifecycle of all components
+- Coordinates 3 primary goroutines:
+  - `consumeFrames`: Reads stream, applies ROI, distributes to workers
+  - `consumeInferences`: Collects results, publishes to MQTT
+  - `watchWorkers`: Health monitoring with adaptive watchdog (max(30s, 3×inference_period))
+
+**Stream Providers**: `internal/stream/`
+- `rtsp.go`: GStreamer pipeline (`rtspsrc → videorate → videoscale → jpegenc`)
+- `mock.go`: Test stream generator
+- `warmup.go`: 5-second warm-up to measure real FPS
+
+**FrameBus**: `internal/framebus/bus.go`
+- Non-blocking fan-out to multiple workers
+- Drop policy when worker channels full
+- Per-worker drop statistics
+
+**Python Worker Bridge**: `internal/worker/person_detector_python.go`
+- Spawns Python subprocess via `exec.Command`
+- MsgPack protocol with 4-byte length-prefix framing
+- 4 goroutines: processFrames, readResults, logStderr, waitProcess
+- Timeout protection: 2s for stdin writes
+
+**Python Inference Worker**: `models/person_detector.py`
+- Multi-model support (YOLO320 for small ROIs ~20ms, YOLO640 for full frames ~50ms)
+- Model selection based on `roi_processing.target_size`
+- Hot-reload command support via stdin JSON commands
+
+**Control Handler**: `internal/control/handler.go`
+- MQTT command processor with callback-based design
+- Supports: pause/resume, rate adjustment, model hot-reload, ROI commands
+
+**MQTT Emitter**: `internal/emitter/mqtt.go`
+- Publishes to `care/inferences/{instance_id}`
+- JSON payloads with timing metrics and metadata
+
+### Go-Python IPC Protocol
+
+**Go → Python (stdin):**
+```
+[4-byte length prefix][MsgPack payload]
+{
+  "frame_data": bytes,  // Raw JPEG, no base64
+  "width": int,
+  "height": int,
+  "meta": {
+    "instance_id": str,
+    "room_id": str,
+    "seq": int,
+    "roi_processing": { "target_size": 320|640 }
+  }
+}
+```
+
+**Python → Go (stdout):**
+```
+[4-byte length prefix][MsgPack payload]
+{
+  "data": {
+    "detections": [...],
+    "person_count": int,
+    "confidence_threshold": float
+  },
+  "timing": {
+    "total_ms": float,
+    "inference_ms": float
+  }
+}
+```
+
+### Hot-Reload Capabilities
+
+| Configuration  | Reload Mechanism   | Interruption | Implementation              |
+| -------------- | ------------------ | ------------ | --------------------------- |
+| Inference Rate | Stream restart     | ~2 seconds   | `RTSPStream.SetTargetFPS()` |
+| Model Size     | Python reload      | None         | JSON command via stdin      |
+| Attention ROIs | Thread-safe update | None         | `sync.RWMutex`              |
+| Pause/Resume   | Flag toggle        | None         | Atomic boolean              |
+
+## Code Patterns and Conventions
+
+### Non-Blocking Channel Operations
+```go
+select {
+case ch <- value:
+    // Success
+default:
+    // Drop and continue (log drop stats)
+}
+```
+
+### Dependency Injection via Callbacks
+```go
+CommandCallbacks{
+    OnGetStatus: o.getStatus,
+    OnPause: o.pauseInference,
+    // ...
+}
+```
+
+### Thread Safety
+- Use `sync.RWMutex` for shared state
+- Use `atomic` operations for counters
+- Use `context.Context` for cancellation propagation
+
+### Structured Logging
+- `slog` with JSON handler
+- Context fields: `instance_id`, `room_id`, `worker_id`
+- Log levels: ERROR, WARNING, INFO, DEBUG
+
+### Error Handling
+- Log errors but continue processing (graceful degradation)
+- Don't crash on single frame failure
+- Worker failures trigger watchdog, not system shutdown
+
+## Configuration Structure
+
+**Primary config**: `config/orion.yaml`
+
+Key sections:
+- `instance_id`, `room_id`: Instance identification
+- `camera.rtsp_url`: RTSP stream URL (optional, falls back to mock)
+- `stream.resolution`, `stream.fps`: Stream settings (512p/720p/1080p)
+- `models.person_detector.model_path`: YOLO model path
+- `models.person_detector.max_inference_rate_hz`: Inference rate limit (e.g., 1.0)
+- `mqtt.broker`: MQTT broker address
+
+## MQTT Control Commands
+
+```bash
+# Get status
+mosquitto_pub -t care/control/{instance_id} -m '{"command":"get_status"}'
+
+# Pause inference
+mosquitto_pub -t care/control/{instance_id} -m '{"command":"pause"}'
+
+# Resume inference
+mosquitto_pub -t care/control/{instance_id} -m '{"command":"resume"}'
+
+# Change inference rate
+mosquitto_pub -t care/control/{instance_id} -m '{"command":"set_inference_rate","rate_hz":2.0}'
+
+# Change model size
+mosquitto_pub -t care/control/{instance_id} -m '{"command":"set_model_size","size":"m"}'
+
+# Shutdown
+mosquitto_pub -t care/control/{instance_id} -m '{"command":"shutdown"}'
+```
+
+## Key Architectural Decisions
+
+### AD-1: Non-Blocking Channels with Drop Policy
+**Why**: Latency > completeness. Prefer dropping frames over queuing to maintain <2s latency.
+- Avoids head-of-line blocking
+- Predictable, bounded latency
+- Drop statistics tracked for observability
+
+### AD-2: Go-Python IPC via MsgPack over stdin/stdout
+**Why**: Low latency (~1-2ms overhead), process isolation, simplicity
+- MsgPack: 5x faster than JSON+base64
+- No base64 overhead for binary data
+- Subprocess isolation: Python crash doesn't kill Go orchestrator
+
+### AD-3: KISS Auto-Recovery (One Restart)
+**Why**: Simplicity > automation. One restart attempt only.
+- Persistent failures indicate deeper issues (corrupt model, missing deps)
+- Prevents infinite restart loops
+- Requires manual intervention for persistent failures
+
+### AD-4: Adaptive Watchdog Timeout
+**Why**: Adapt to configured inference rate
+- Formula: `max(30s, 3 × inference_period)`
+- Example: 1 Hz inference → 3s expected, 30s timeout (safety margin)
+
+### AD-5: MQTT for Control Plane
+**Why**: IoT/edge deployment patterns, asynchronous control, NAT-friendly
+- Works behind firewalls (outbound connections only)
+- Event-driven by design
+- Standard IoT protocol
+
+## ROI Attention System
+
+- **Multi-model selection**: YOLO320 (small ROIs) vs YOLO640 (full frames)
+- **Dynamic threshold**: Model selection based on ROI area
+- **Performance**: YOLO320 ~20ms, YOLO640 ~50ms inference time
+- **Future**: ROI processing will be moved to Python workers (currently in Go)
+
+## Documentation
+
+Extensive architecture documentation in:
+- `/home/visiona/Work/OrionWork/VAULT/arquitecture/ARCHITECTURE.md` - 4+1 architectural views
+- `/home/visiona/Work/OrionWork/VAULT/D002 About Orion.md` - Design decisions and trade-offs
+- `/home/visiona/Work/OrionWork/VAULT/arquitecture/wiki/` - Component-level wiki
+
+
+
+```
+
+VAULT/
+│
+├── 📘 ENTRADA & FILOSOFÍA
+│   ├── D001 Bienvenido.md .................... [PUNTO DE ENTRADA]
+│   ├── D002 About Orion.md ................... [FILOSOFÍA: "Ve, No Interpreta"]
+│   └── D004 Analisis de Disenio y Codigo.md .. [PRINCIPIOS DE DISEÑO]
+│
+├── 🏛️ ARQUITECTURA GLOBAL
+│   ├── D003 The Big Picture.md ............... [ANCLAJE: VISIÓN GENERAL]
+│   └── arquitecture/
+│       ├── ARCHITECTURE.md ................... [ANCLAJE: VISTAS 4+1]
+│       └── another document of Arquitectura .. [CATÁLOGO DE DECISIONES]
+│
+├── 📚 WIKI TÉCNICA (Referencia Detallada)
+│   ├── 2-core-service-oriond.md .............. [ANCLAJE: ORION CORE]
+│   ├── 2.1-service-orchestration.md .......... [Ciclo de Vida]
+│   ├── 2.2-stream-providers.md ............... [RTSP/GStreamer]
+│   ├── 2.4-frame-distribution.md ............. [ANCLAJE: FRAMEBUS]
+│   ├── 2.5-python-worker-bridge.md ........... [Go-Python IPC]
+│   │
+│   ├── 3-mqtt-control-plane.md ............... [ANCLAJE: PLANO DE CONTROL]
+│   ├── 3.1-topic-structure.md ................ [Jerarquía de Topics]
+│   ├── 3.2-command-reference.md .............. [Catálogo de Comandos]
+│   ├── 3.3-hot-reload-mechanisms.md .......... [ANCLAJE: HOT-RELOAD]
+│   │
+│   ├── 4-python-inference-workers.md ......... [ANCLAJE: WORKERS PYTHON] ⭐
+│   ├── 4.1-person-detector.md ................ [Implementación Detector]
+│   └── 4.2-model-management.md ............... [Gestión de Modelos]
+│
+├── 🎤 NARRATIVA & CONTEXTO NEGOCIO
+│   ├── El Viaje de un Fotón.md ............... [Narrativa de Negocio]
+│   ├── Nuestro sistema de IA.md .............. [Filosofía de Diseño - Talk]
+│   └── Orion_Ve,_Sala_Entiende.md ............ [Overview del Sistema - Podcast]
+│
+└── 🔬 PROPUESTAS & INVESTIGACIÓN
+    ├── la resolución de entrada.md ........... [Nota de Investigación]
+    └── Double-Close Panic.md ................. [Log de Fix Técnico]
+    
+```
+
+## Development Workflow
+
+### When Adding New Features
+
+1. **Understand the Big Picture**: Review VAULT documentation before coding
+2. **Complexity by Design**: Attack complexity through architecture, not code tricks
+3. **Fail Fast**: Validate at load time, not runtime
+4. **Cohesion > Location**: Modules defined by conceptual cohesion, not size
+5. **One Reason to Change**: Each module has a single responsibility (SRP)
+
+### Code Review Standards
+
+- "Simple para leer, NO simple para escribir una vez"
+- Clean design ≠ simplistic design
+- Modularity reduces complexity when applied correctly
+- Document architectural decisions (ADR style)
+
+### Commit Standards
+
+- Co-authored by: `Gaby de Visiona <noreply@visiona.app>`
+- Do NOT include "Generated with Claude Code" footer (implicit in co-author)
+- Focus on "why" rather than "what" in commit messages
+- Follow existing commit style (see `git log`)
+
+## System Positioning
+
+**Orion is NOT**:
+- A competitor to Frigate NVR (end-user product)
+- A competitor to DeepStream/DL Streamer (monolithic frameworks)
+- An interpretation or decision engine
+
+**Orion IS**:
+- A configurable "smart sensor" for distributed architectures
+- Best-in-class for event-driven AI sensor deployments
+- A building block for larger monitoring systems
+- Hardware-agnostic (ONNX enables GPU acceleration in Python without Go changes)
+
+## Scalability Paths
+
+- **Horizontal**: Add new worker types (pose, facial recognition) via FrameBus fan-out
+- **Vertical**: GPU acceleration in Python (transparent to Go)
+- **Multi-stream**: Add `stream_id` metadata (minor changes needed)
+- **Distributed**: Stateless design ready for Kubernetes
+
+## Known Issues / Technical Debt
+
+- MsgPack upgrade not yet documented (code exceeds documentation)
+- Probe functionality disabled (GStreamer mainloop issues)
+- ROI Processor planned to be removed from Go (workers will handle ROIs)
+- No Makefile in prototype (binary pre-built in `bin/oriond`)

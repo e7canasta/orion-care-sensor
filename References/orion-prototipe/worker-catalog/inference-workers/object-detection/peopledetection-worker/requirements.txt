@@ -1,0 +1,16 @@
+# Python Worker Dependencies
+
+# ONNX Runtime (CPU version)
+onnxruntime>=1.16.0
+
+# Numpy for array operations
+numpy>=1.24.0
+
+# OpenCV for image preprocessing (optional, fallback to PIL)
+opencv-python>=4.8.0
+
+# Pillow as fallback for image operations
+Pillow>=10.0.0
+
+# MsgPack for efficient binary serialization (Go ↔ Python IPC)
+msgpack>=1.0.0

@@ -54,8 +54,9 @@ func (w *LatencyWindow) GetStats() (mean, p95, max float64) {
 	validSamples := make([]float64, w.Count)
 	copy(validSamples, w.Samples[:w.Count])
 
-	// Calculate mean
+	// Calculate mean and max
 	var sum float64
+	max = validSamples[0] // Fix: Initialize max to first sample (handles negative values)
 	for _, sample := range validSamples {
 		sum += sample
 		if sample > max {
@@ -66,7 +67,14 @@ func (w *LatencyWindow) GetStats() (mean, p95, max float64) {
 
 	// Calculate P95 (sort required)
 	sort.Float64s(validSamples)
-	p95Index := int(float64(w.Count) * 0.95)
+	// Fix: P95 index calculation
+	// For N samples, P95 should exclude top 5% (ceil(N * 0.05) samples)
+	// Example: 20 samples → exclude top 1 sample → P95 = sample at index 18 (19th value)
+	// Formula: P95_index = ceil(N * 0.95) - 1 = floor(N * 0.95 - 0.0001)
+	p95Index := int(float64(w.Count)*0.95) - 1
+	if p95Index < 0 {
+		p95Index = 0
+	}
 	if p95Index >= w.Count {
 		p95Index = w.Count - 1
 	}

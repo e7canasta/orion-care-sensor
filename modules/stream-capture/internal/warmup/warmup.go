@@ -21,7 +21,10 @@ type WarmupStats struct {
 	FPSStdDev      float64       // Standard deviation of FPS
 	FPSMin         float64       // Minimum instantaneous FPS
 	FPSMax         float64       // Maximum instantaneous FPS
-	IsStable       bool          // True if FPS is stable (stddev < 15% of mean)
+	IsStable       bool          // True if FPS is stable (stddev < 15% of mean AND jitter < 20%)
+	JitterMean     float64       // Average inter-frame interval variance (seconds)
+	JitterStdDev   float64       // Standard deviation of jitter (seconds)
+	JitterMax      float64       // Maximum jitter observed (seconds)
 }
 
 // WarmupStream warms up the stream by consuming frames for the specified duration
@@ -91,8 +94,8 @@ analyze:
 		)
 	}
 
-	// Calculate FPS statistics (delegates to public function)
-	stats := calculateFPSStatsInternal(frameTimes, elapsed)
+	// Calculate FPS statistics (local function, no external dependencies)
+	stats := CalculateFPSStats(frameTimes, elapsed)
 
 	slog.Info("warmup: stream warm-up complete",
 		"frames", stats.FramesReceived,
@@ -100,13 +103,18 @@ analyze:
 		"fps_mean", fmt.Sprintf("%.2f", stats.FPSMean),
 		"fps_stddev", fmt.Sprintf("%.2f", stats.FPSStdDev),
 		"fps_range", fmt.Sprintf("%.1f-%.1f", stats.FPSMin, stats.FPSMax),
+		"jitter_mean", fmt.Sprintf("%.3fs", stats.JitterMean),
 		"stable", stats.IsStable,
 	)
 
+	// Fail-fast: Warmup MUST verify stream stability before production use
+	// Unstable FPS indicates network issues, camera problems, or pipeline misconfiguration
 	if !stats.IsStable {
-		slog.Warn("warmup: stream FPS is unstable, may affect inference timing",
-			"fps_stddev", stats.FPSStdDev,
-			"fps_mean", stats.FPSMean,
+		return nil, fmt.Errorf(
+			"warmup: stream FPS unstable (mean=%.2f Hz, stddev=%.2f, jitter=%.3fs, threshold: FPS<15%%, jitter<20%%)",
+			stats.FPSMean,
+			stats.FPSStdDev,
+			stats.JitterMean,
 		)
 	}
 

@@ -44,6 +44,44 @@ type StreamStats struct {
 	BytesRead uint64
 	// IsConnected indicates if the stream is currently connected
 	IsConnected bool
+	// ErrorsNetwork is the count of network-related errors (connection, timeout, not found)
+	ErrorsNetwork uint64
+	// ErrorsCodec is the count of codec/stream errors (decode failures, format issues)
+	ErrorsCodec uint64
+	// ErrorsAuth is the count of authentication/authorization errors
+	ErrorsAuth uint64
+	// ErrorsUnknown is the count of unclassified errors
+	ErrorsUnknown uint64
+}
+
+// ErrorCategory represents the classification of GStreamer errors for telemetry
+type ErrorCategory int
+
+const (
+	// ErrCategoryNetwork indicates network-related failures (connection, timeout, DNS)
+	ErrCategoryNetwork ErrorCategory = iota
+	// ErrCategoryCodec indicates codec/stream failures (decode errors, format issues)
+	ErrCategoryCodec
+	// ErrCategoryAuth indicates authentication/authorization failures
+	ErrCategoryAuth
+	// ErrCategoryUnknown indicates unclassified errors
+	ErrCategoryUnknown
+)
+
+// String returns a human-readable string representation of the error category
+func (e ErrorCategory) String() string {
+	switch e {
+	case ErrCategoryNetwork:
+		return "network"
+	case ErrCategoryCodec:
+		return "codec"
+	case ErrCategoryAuth:
+		return "auth"
+	case ErrCategoryUnknown:
+		return "unknown"
+	default:
+		return "unknown"
+	}
 }
 
 // Resolution represents supported video resolutions

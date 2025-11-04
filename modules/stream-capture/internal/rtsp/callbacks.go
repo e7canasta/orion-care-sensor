@@ -5,17 +5,28 @@ import (
 	"sync/atomic"
 	"time"
 
-	streamcapture "github.com/e7canasta/orion-care-sensor/modules/stream-capture"
 	"github.com/google/uuid"
 	"github.com/tinyzimmer/go-gst/gst"
 	"github.com/tinyzimmer/go-gst/gst/app"
 )
 
+// Frame is a minimal frame struct for internal use (avoids import cycle)
+// The actual Frame type is defined in the parent package
+type Frame struct {
+	Seq          uint64
+	Timestamp    time.Time
+	Width        int
+	Height       int
+	Data         []byte
+	SourceStream string
+	TraceID      string
+}
+
 // CallbackContext holds state needed by GStreamer callbacks
 type CallbackContext struct {
-	FrameChan    chan<- streamcapture.Frame
-	FrameCounter *uint64 // Atomic counter for sequence numbers
-	BytesRead    *uint64 // Atomic counter for bytes read
+	FrameChan    chan<- Frame // Uses internal Frame type
+	FrameCounter *uint64      // Atomic counter for sequence numbers
+	BytesRead    *uint64      // Atomic counter for bytes read
 	Width        int
 	Height       int
 	SourceStream string
@@ -64,8 +75,8 @@ func OnNewSample(sink *app.Sink, ctx *CallbackContext) gst.FlowReturn {
 	seq := atomic.AddUint64(ctx.FrameCounter, 1)
 	atomic.AddUint64(ctx.BytesRead, uint64(len(data)))
 
-	// Create frame struct
-	frame := streamcapture.Frame{
+	// Create frame struct (using internal Frame type)
+	frame := Frame{
 		Seq:          seq,
 		Timestamp:    time.Now(),
 		Width:        ctx.Width,

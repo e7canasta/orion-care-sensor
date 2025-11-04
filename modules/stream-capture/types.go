@@ -1,6 +1,9 @@
 package streamcapture
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Frame represents a single video frame with metadata
 type Frame struct {
@@ -202,6 +205,29 @@ type RTSPConfig struct {
 	// AccelVAAPI: Force VAAPI, fail-fast if unavailable
 	// AccelSoftware: Force software decode
 	Acceleration HardwareAccel
+}
+
+// Validate checks if the configuration is valid
+//
+// Returns an error if:
+//   - URL is empty
+//   - TargetFPS is outside valid range (0.1-30.0)
+//   - Resolution is invalid (0x0 dimensions)
+func (c RTSPConfig) Validate() error {
+	if c.URL == "" {
+		return fmt.Errorf("RTSP URL is required")
+	}
+
+	if c.TargetFPS < 0.1 || c.TargetFPS > 30 {
+		return fmt.Errorf("invalid FPS %.2f (must be 0.1-30)", c.TargetFPS)
+	}
+
+	width, height := c.Resolution.Dimensions()
+	if width == 0 || height == 0 {
+		return fmt.Errorf("invalid resolution %v", c.Resolution)
+	}
+
+	return nil
 }
 
 // WarmupStats contains statistics collected during stream warm-up phase

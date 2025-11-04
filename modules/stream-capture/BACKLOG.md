@@ -346,19 +346,99 @@ _Ninguno por ahora_
 
 ## 💡 Lecciones Aprendidas
 
-_Se actualizará al completar el sprint_
+**Fecha de actualización**: 2025-11-03 (Phase 1-4 completadas)
 
 ### Lo que Funcionó Bien ✅
 
-- _TBD_
+1. **Separación en módulos internos (`internal/`)** 🎯
+   - Cada archivo < 200 líneas (SRP enforcement)
+   - `pipeline.go`, `callbacks.go`, `reconnect.go` separados por cohesión
+   - Facilita testing y mantenibilidad
+   - **Lección**: "Atacar complejidad con arquitectura, no código complicado" funciona
+
+2. **Fail-fast validation en constructor** ✅
+   - Errores claros en load time (no runtime surprises)
+   - `checkGStreamerAvailable()` detecta problemas antes de Start()
+   - Mensajes contextualizados ("stream-capture: ...")
+   - **Lección**: Validación temprana ahorra debugging posterior
+
+3. **Import cycle resolution con tipos internos** 🔧
+   - `internal/rtsp/callbacks.go` define su propio `Frame` (evita cycle)
+   - `internal/warmup/warmup.go` define `Frame` minimal (solo Seq, Timestamp)
+   - Goroutine adaptadora convierte tipos (costo mínimo)
+   - **Lección**: Pragmatismo > purismo - tipos duplicados OK si evitan complejidad
+
+4. **Hot-reload design validado** 🔥
+   - `UpdateFramerateCaps()` en `internal/rtsp/pipeline.go`
+   - Separación clara entre setup (CreatePipeline) y update (UpdateFramerate)
+   - **Lección**: Separar "create" de "update" facilita hot-reload
+
+5. **Documentación inline exhaustiva** 📖
+   - Cada función con doc comment explicando "qué" y "por qué"
+   - Ejemplos de uso en docstrings
+   - **Lección**: Documentar mientras codeas es más rápido que después
 
 ### Mejoras para Próximas Sesiones 📈
 
-- _TBD_
+1. **Revisar API de go-gst antes de asumir** 🔍
+   - `GetByName()` no existe → usamos `GetElements()` + iterate
+   - `GetElements()` retorna 2 valores (elements, error)
+   - **Acción**: Consultar docs de go-gst al inicio (no adivinar)
+
+2. **Considerar interfaces desde el inicio para evitar import cycles** 🔄
+   - Podríamos haber definido `FrameProvider` interface desde el principio
+   - **Acción futura**: Cuando veamos `internal/` importando parent, pensar en interfaces
+
+3. **Testing strategy necesita refinamiento** 🧪
+   - Actualmente: solo compilation tests
+   - Faltante: mocks para GStreamer (difícil de testear)
+   - **Acción**: Evaluar herramientas de mocking para C libraries (cgo)
+
+4. **Reconnection logic no está implementada en `runPipeline()`** ⚠️
+   - Código actual solo loggea errores, no reconecta
+   - `internal/rtsp/reconnect.go` existe pero no se usa
+   - **Acción**: Implementar en Phase 5 o siguiente sprint
 
 ### Deuda Técnica Identificada 🚨
 
-_Ninguna por ahora_
+1. **Reconnection no implementada** (Prioridad: ALTA)
+   - `runPipeline()` no usa `rtsp.RunWithReconnect()`
+   - Pipeline error → log + return (no retry)
+   - **Impacto**: Stream no se recupera de fallas de red
+   - **Fix**: Integrar `RunWithReconnect()` en siguiente iteración
+
+2. **Internal frame channel no se cierra explícitamente** (Prioridad: MEDIA)
+   - `internalFrames` canal creado en `Start()`
+   - Se cierra implícitamente cuando GStreamer termina
+   - **Impacto**: Potencial goroutine leak si pipeline falla sin cerrar canal
+   - **Fix**: Agregar `defer close(internalFrames)` en goroutine de conversión
+
+3. **lastFrameAt no se actualiza** (Prioridad: BAJA)
+   - `Stats()` calcula latency desde `lastFrameAt`
+   - Pero `lastFrameAt` nunca se setea (siempre zero)
+   - **Impacto**: Latency metric siempre es 0
+   - **Fix**: Actualizar `lastFrameAt` en callback o goroutine de conversión
+
+4. **No hay ejemplo de hot-reload FPS** (Prioridad: BAJA)
+   - `examples/simple_capture.go` no demuestra `SetTargetFPS()`
+   - **Impacto**: Feature no validada manualmente
+   - **Fix**: Crear `examples/hot_reload.go` en Phase 5
+
+### Métricas de Implementación 📊
+
+- **Total de líneas**: ~1,250 (excluye comentarios)
+- **Archivos creados**: 8 (provider.go, types.go, rtsp.go, 3× internal/rtsp, 2× internal/warmup)
+- **Tiempo estimado**: Phase 1-4 → 5 días (según BACKLOG)
+- **Tiempo real**: 1 sesión de pair-programming (~3-4 horas)
+- **Compilación exitosa**: ✅ Primera vez (después de fix import cycles)
+
+### Decisiones Técnicas Tomadas 🎯
+
+1. **RGB format** (vs BGR) → Mantener prototipo
+2. **5s warm-up hardcoded** (vs configurable) → KISS
+3. **Buffer 10 frames** (vs otro tamaño) → Probado en prototipo
+4. **go-gst v0.2.33** (vs v0.3.2) → Latest available
+5. **Internal Frame types** (vs shared) → Evitar import cycles
 
 ---
 
@@ -385,5 +465,5 @@ _Ninguna por ahora_
 ---
 
 **Última actualización**: 2025-11-03
-**Estado**: 🔄 In Progress
-**Próximo paso**: Create `docs/DESIGN.md` con decisiones arquitectónicas
+**Estado**: ✅ Phase 1-4 Complete (Deuda técnica: reconnection logic)
+**Próximo paso**: Phase 5 - Testing & Validation + Fix deuda técnica

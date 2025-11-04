@@ -46,17 +46,17 @@ C4Context
 
 ### **Descripción de Actores y Sistemas**
 
-| Elemento | Tipo | Responsabilidad |
-|---|---|---|
-| **Enfermera** | Actor | Recibe alertas, interviene en situaciones de riesgo |
-| **Administrador** | Actor | Configura scenarios, gestiona políticas |
-| **Orion** | System | Sensor objetivo: captura video, ejecuta workers AI, emite inferencias |
-| **Scene Experts Mesh** | System | Interpreta inferencias, emite eventos de dominio (sleep.restless, edge.confirmed) |
-| **Room Orchestrator** | System | Coordina expertos, gestiona recursos, ejecuta scenarios |
-| **Temporal Supervisor** | System | Aprendizaje continuo, discovery B2B, compliance |
-| **Cámara IP** | External | Fuente de video RTSP |
-| **MQTT Broker** | External | Bus de eventos (data + control plane) |
-| **Nurse Dashboard** | External | UI para enfermeras |
+| Elemento                | Tipo     | Responsabilidad                                                                   |
+| ----------------------- | -------- | --------------------------------------------------------------------------------- |
+| **Enfermera**           | Actor    | Recibe alertas, interviene en situaciones de riesgo                               |
+| **Administrador**       | Actor    | Configura scenarios, gestiona políticas                                           |
+| **Orion**               | System   | Sensor objetivo: captura video, ejecuta workers AI, emite inferencias             |
+| **Scene Experts Mesh**  | System   | Interpreta inferencias, emite eventos de dominio (sleep.restless, edge.confirmed) |
+| **Room Orchestrator**   | System   | Coordina expertos, gestiona recursos, ejecuta scenarios                           |
+| **Temporal Supervisor** | System   | Aprendizaje continuo, discovery B2B, compliance                                   |
+| **Cámara IP**           | External | Fuente de video RTSP                                                              |
+| **MQTT Broker**         | External | Bus de eventos (data + control plane)                                             |
+| **Nurse Dashboard**     | External | UI para enfermeras                                                                |
 
 ---
 
@@ -116,18 +116,18 @@ C4Container
 
 ### **Descripción de Containers**
 
-| Container | Tecnología | Responsabilidad | Bounded Context |
-|---|---|---|---|
-| **Orion Main** | Go | Entry point, config loader, lifecycle | Application Core |
-| **Stream Capture** | Go (GStreamer CGo) | RTSP capture, reconnection, warm-up | Stream Acquisition |
-| **Worker Manager** | Go | Spawn/monitor Python workers, IPC MsgPack | Worker Lifecycle |
-| **FrameBus** | Go | Non-blocking fan-out, drop policy | Frame Distribution |
-| **Event Emitter** | Go | MQTT publisher (data plane) | Event Emission |
-| **Control Handler** | Go | MQTT subscriber (control plane) | Command Processing |
-| **Worker Catalog** | YAML files | Worker manifests, schemas, resource profiles | Worker Registry |
-| **Person Detector** | Python (ONNX) | YOLO11 person detection | AI Inference |
-| **Pose Estimator** | Python (ONNX) | Keypoint estimation | AI Inference |
-| **Flow Analyzer** | Python (OpenCV) | Optical flow motion | AI Inference |
+| Container           | Tecnología         | Responsabilidad                              | Bounded Context    |
+| ------------------- | ------------------ | -------------------------------------------- | ------------------ |
+| **Orion Main**      | Go                 | Entry point, config loader, lifecycle        | Application Core   |
+| **Stream Capture**  | Go (GStreamer CGo) | RTSP capture, reconnection, warm-up          | Stream Acquisition |
+| **Worker Manager**  | Go                 | Spawn/monitor Python workers, IPC MsgPack    | Worker Lifecycle   |
+| **FrameBus**        | Go                 | Non-blocking fan-out, drop policy            | Frame Distribution |
+| **Event Emitter**   | Go                 | MQTT publisher (data plane)                  | Event Emission     |
+| **Control Handler** | Go                 | MQTT subscriber (control plane)              | Command Processing |
+| **Worker Catalog**  | YAML files         | Worker manifests, schemas, resource profiles | Worker Registry    |
+| **Person Detector** | Python (ONNX)      | YOLO11 person detection                      | AI Inference       |
+| **Pose Estimator**  | Python (ONNX)      | Keypoint estimation                          | AI Inference       |
+| **Flow Analyzer**   | Python (OpenCV)    | Optical flow motion                          | AI Inference       |
 
 ---
 

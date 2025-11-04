@@ -24,6 +24,7 @@ type PipelineElements struct {
 	VideoRate  *gst.Element
 	CapsFilter *gst.Element
 	RTSPSrc    *gst.Element
+	UsingVAAPI bool // True if VAAPI hardware acceleration is active
 }
 
 // CreatePipeline creates and configures a GStreamer pipeline for RTSP streaming
@@ -235,6 +236,7 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 		VideoRate:  videorate,
 		CapsFilter: capsfilter,
 		RTSPSrc:    rtspsrc,
+		UsingVAAPI: usingVAAPI,
 	}, nil
 }
 

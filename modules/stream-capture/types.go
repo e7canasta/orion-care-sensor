@@ -52,6 +52,17 @@ type StreamStats struct {
 	ErrorsAuth uint64
 	// ErrorsUnknown is the count of unclassified errors
 	ErrorsUnknown uint64
+	// DecodeLatencyMeanMS is the mean decode latency in milliseconds (PTS → callback arrival)
+	// Only populated when using hardware acceleration (VAAPI)
+	DecodeLatencyMeanMS float64
+	// DecodeLatencyP95MS is the 95th percentile decode latency in milliseconds
+	// Represents the latency experienced by 95% of frames (SLO metric)
+	DecodeLatencyP95MS float64
+	// DecodeLatencyMaxMS is the maximum decode latency observed in milliseconds
+	// Useful for detecting tail latency (thermal throttling, I/O stalls)
+	DecodeLatencyMaxMS float64
+	// UsingVAAPI indicates if VAAPI hardware acceleration is active
+	UsingVAAPI bool
 }
 
 // ErrorCategory represents the classification of GStreamer errors for telemetry

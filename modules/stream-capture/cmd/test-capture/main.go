@@ -234,6 +234,15 @@ func main() {
 				fmt.Printf("│ Bytes Read:         %6.2f MB\n", float64(stats.BytesRead)/1024/1024)
 				fmt.Printf("│ Reconnects:         %6d\n", stats.Reconnects)
 				fmt.Printf("│ Connected:          %6v\n", stats.IsConnected)
+				// Show VAAPI telemetry if hardware acceleration is active
+				if stats.UsingVAAPI {
+					fmt.Printf("├─────────────────────────────────────────────────────────┤\n")
+					fmt.Printf("│ VAAPI Decode Latency Telemetry\n")
+					fmt.Printf("├─────────────────────────────────────────────────────────┤\n")
+					fmt.Printf("│ Mean Latency:       %6.2f ms\n", stats.DecodeLatencyMeanMS)
+					fmt.Printf("│ P95 Latency:        %6.2f ms\n", stats.DecodeLatencyP95MS)
+					fmt.Printf("│ Max Latency:        %6.2f ms\n", stats.DecodeLatencyMaxMS)
+				}
 				// Show error telemetry if any errors occurred
 				totalErrors := stats.ErrorsNetwork + stats.ErrorsCodec + stats.ErrorsAuth + stats.ErrorsUnknown
 				if totalErrors > 0 {
@@ -320,6 +329,13 @@ shutdown:
 	fmt.Printf("  Average FPS:        %.2f fps\n", finalStats.FPSReal)
 	fmt.Printf("  Bytes Read:         %.2f MB\n", float64(finalStats.BytesRead)/1024/1024)
 	fmt.Printf("  Reconnection Count: %d\n", finalStats.Reconnects)
+	if finalStats.UsingVAAPI {
+		fmt.Printf("─────────────────────────────────────────────────────────\n")
+		fmt.Printf("  VAAPI Acceleration: Active\n")
+		fmt.Printf("  Mean Decode Latency: %.2f ms\n", finalStats.DecodeLatencyMeanMS)
+		fmt.Printf("  P95 Decode Latency:  %.2f ms\n", finalStats.DecodeLatencyP95MS)
+		fmt.Printf("  Max Decode Latency:  %.2f ms\n", finalStats.DecodeLatencyMaxMS)
+	}
 	fmt.Printf("═══════════════════════════════════════════════════════════\n")
 	fmt.Printf("\n")
 

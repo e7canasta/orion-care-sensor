@@ -49,6 +49,10 @@ type RTSPStream struct {
 	errorsAuth    uint64 // Authentication/authorization errors
 	errorsUnknown uint64 // Unclassified errors
 
+	// VAAPI telemetry
+	usingVAAPI      bool                               // True if VAAPI pipeline is active
+	decodeLatencies atomic.Pointer[rtsp.LatencyWindow] // Lock-free latency tracking
+
 	// Reconnection state
 	reconnectState *rtsp.ReconnectState
 	reconnectCfg   rtsp.ReconnectConfig
@@ -183,6 +187,16 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 	}
 	s.elements = elements
 
+	// Set VAAPI flag from pipeline detection
+	s.usingVAAPI = elements.UsingVAAPI
+
+	// Initialize latency tracking if VAAPI is active
+	if s.usingVAAPI {
+		initialWindow := &rtsp.LatencyWindow{}
+		s.decodeLatencies.Store(initialWindow)
+		slog.Info("stream-capture: VAAPI hardware acceleration active, latency tracking enabled")
+	}
+
 	// Create internal frame channel for callbacks
 	// (avoids import cycle by using rtsp.Frame instead of streamcapture.Frame)
 	internalFrames := make(chan rtsp.Frame, 10)
@@ -196,6 +210,11 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 		Width:         s.width,
 		Height:        s.height,
 		SourceStream:  s.sourceStream,
+	}
+
+	// Enable latency tracking if VAAPI is active
+	if s.usingVAAPI {
+		callbackCtx.DecodeLatencies = &s.decodeLatencies
 	}
 
 	// Launch goroutine to convert internal frames to public frames
@@ -528,6 +547,15 @@ func (s *RTSPStream) Stats() StreamStats {
 	errorsAuth := atomic.LoadUint64(&s.errorsAuth)
 	errorsUnknown := atomic.LoadUint64(&s.errorsUnknown)
 
+	// Calculate VAAPI decode latency stats (lock-free read)
+	var decodeMean, decodeP95, decodeMax float64
+	if s.usingVAAPI {
+		window := s.decodeLatencies.Load()
+		if window != nil {
+			decodeMean, decodeP95, decodeMax = window.GetStats()
+		}
+	}
+
 	return StreamStats{
 		FrameCount:    frameCount,
 		FramesDropped: framesDropped,
@@ -540,10 +568,14 @@ func (s *RTSPStream) Stats() StreamStats {
 		Reconnects:    reconnects,
 		BytesRead:     bytesRead,
 		IsConnected:   isConnected,
-		ErrorsNetwork: errorsNetwork,
-		ErrorsCodec:   errorsCodec,
-		ErrorsAuth:    errorsAuth,
-		ErrorsUnknown: errorsUnknown,
+		ErrorsNetwork:       errorsNetwork,
+		ErrorsCodec:         errorsCodec,
+		ErrorsAuth:          errorsAuth,
+		ErrorsUnknown:       errorsUnknown,
+		DecodeLatencyMeanMS: decodeMean,
+		DecodeLatencyP95MS:  decodeP95,
+		DecodeLatencyMaxMS:  decodeMax,
+		UsingVAAPI:          s.usingVAAPI,
 	}
 }
 

@@ -2,6 +2,7 @@ package rtsp
 
 import (
 	"log/slog"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -22,15 +23,68 @@ type Frame struct {
 	TraceID      string
 }
 
+// LatencyWindow maintains a rolling window of decode latency samples
+// for statistical analysis (mean, P95, max).
+//
+// Thread-safety: Accessed via atomic.Pointer for lock-free reads/writes.
+// Ring buffer of fixed size (100 samples) to bound memory usage.
+type LatencyWindow struct {
+	Samples [100]float64 // Ring buffer of latency samples (milliseconds)
+	Index   int          // Current write index (wraps around)
+	Count   int          // Total samples collected (capped at len(Samples))
+}
+
+// AddSample adds a latency sample to the window (lock-free via atomic pointer swap)
+func (w *LatencyWindow) AddSample(latencyMS float64) {
+	w.Samples[w.Index] = latencyMS
+	w.Index = (w.Index + 1) % len(w.Samples)
+	if w.Count < len(w.Samples) {
+		w.Count++
+	}
+}
+
+// GetStats calculates mean, P95, and max from current window
+// Returns zeros if window is empty.
+func (w *LatencyWindow) GetStats() (mean, p95, max float64) {
+	if w.Count == 0 {
+		return 0, 0, 0
+	}
+
+	// Copy samples for safe calculation (avoid mutation during sort)
+	validSamples := make([]float64, w.Count)
+	copy(validSamples, w.Samples[:w.Count])
+
+	// Calculate mean
+	var sum float64
+	for _, sample := range validSamples {
+		sum += sample
+		if sample > max {
+			max = sample
+		}
+	}
+	mean = sum / float64(w.Count)
+
+	// Calculate P95 (sort required)
+	sort.Float64s(validSamples)
+	p95Index := int(float64(w.Count) * 0.95)
+	if p95Index >= w.Count {
+		p95Index = w.Count - 1
+	}
+	p95 = validSamples[p95Index]
+
+	return mean, p95, max
+}
+
 // CallbackContext holds state needed by GStreamer callbacks
 type CallbackContext struct {
-	FrameChan     chan<- Frame // Uses internal Frame type
-	FrameCounter  *uint64      // Atomic counter for sequence numbers
-	BytesRead     *uint64      // Atomic counter for bytes read
-	FramesDropped *uint64      // Atomic counter for dropped frames (channel full)
-	Width         int
-	Height        int
-	SourceStream  string
+	FrameChan       chan<- Frame                  // Uses internal Frame type
+	FrameCounter    *uint64                       // Atomic counter for sequence numbers
+	BytesRead       *uint64                       // Atomic counter for bytes read
+	FramesDropped   *uint64                       // Atomic counter for dropped frames (channel full)
+	Width           int                           // Frame width in pixels
+	Height          int                           // Frame height in pixels
+	SourceStream    string                        // Stream identifier (e.g., "LQ", "HQ")
+	DecodeLatencies *atomic.Pointer[LatencyWindow] // Lock-free latency tracking (nil if disabled)
 }
 
 // OnNewSample is called by GStreamer when a new frame is available
@@ -60,6 +114,20 @@ func OnNewSample(sink *app.Sink, ctx *CallbackContext) gst.FlowReturn {
 		slog.Warn("rtsp: failed to get buffer from sample, skipping frame")
 		return gst.FlowOK
 	}
+
+	// Capture decode latency telemetry (VAAPI performance tracking)
+	//
+	// Note: GStreamer PTS is relative to pipeline start time, not absolute wall-clock time.
+	// We can't directly measure "camera timestamp → callback arrival" latency without
+	// additional metadata from the camera.
+	//
+	// What we CAN measure here is inter-frame processing time variance, which indirectly
+	// indicates decode performance. For now, we skip this measurement and rely on
+	// overall FPS metrics. Future enhancement: use GStreamer probes on decoder element
+	// to measure decode time directly.
+	//
+	// TODO(future): Add GstPadProbe on decoder output to measure decode-specific latency
+	_ = ctx.DecodeLatencies // Placeholder for future implementation
 
 	// Map buffer to read data
 	mapInfo := buffer.Map(gst.MapRead)

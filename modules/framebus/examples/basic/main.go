@@ -60,7 +60,16 @@ func main() {
 
 	// Final stats
 	fmt.Println("\n=== Final Statistics ===")
-	printStats(bus.Stats())
+	stats := bus.Stats()
+	printStats(stats)
+	
+	// Show drop rates with helper functions
+	fmt.Printf("\nGlobal Drop Rate: %.2f%%\n", framebus.CalculateDropRate(stats)*100)
+	fmt.Println("\nPer-Worker Drop Rates:")
+	for id := range stats.Subscribers {
+		rate := framebus.CalculateSubscriberDropRate(stats, id)
+		fmt.Printf("  %s: %.2f%%\n", id, rate*100)
+	}
 
 	// Stop workers
 	close(worker1)

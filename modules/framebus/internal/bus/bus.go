@@ -1,87 +1,14 @@
-// Package framebus provides non-blocking frame distribution to multiple subscribers.
+// Package bus provides the internal implementation of FrameBus.
 //
-// FrameBus implements a fan-out pattern where frames published to the bus are distributed
-// to all registered subscribers using Go channels. If a subscriber's channel is full,
-// the frame is dropped rather than queued, maintaining real-time processing semantics.
-//
-// # Core Philosophy
-//
-// "Drop frames, never queue. Latency > Completeness."
-//
-// FrameBus prioritizes low latency over guaranteed delivery. This design choice is
-// intentional for real-time video processing where processing recent frames is more
-// valuable than processing a backlog of stale frames.
-//
-// # Basic Usage
-//
-//	bus := framebus.New()
-//	defer bus.Close()
-//
-//	// Create subscriber channel
-//	workerCh := make(chan framebus.Frame, 5)
-//	bus.Subscribe("worker-1", workerCh)
-//
-//	// Publish frames (non-blocking)
-//	for frame := range source {
-//	    bus.Publish(frame)
-//	}
-//
-//	// Check stats
-//	stats := bus.Stats()
-//	fmt.Printf("Published: %d, Sent: %d, Dropped: %d\n",
-//	    stats.TotalPublished, stats.TotalSent, stats.TotalDropped)
-//
-// # Thread Safety
-//
-// All methods are safe for concurrent use. Multiple goroutines can call Publish()
-// simultaneously, and Subscribe/Unsubscribe can be called while publishing.
-//
-// # Performance
-//
-// Publish() completes in microseconds and never blocks, even with slow subscribers.
-// Memory usage is constant (bounded by subscriber channel buffers).
-package framebus
+// This package is internal and should not be imported directly.
+// Use github.com/visiona/orion/modules/framebus instead.
+package bus
 
 import (
 	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
-)
-
-// Bus distributes frames to multiple subscribers with drop policy.
-type Bus interface {
-	// Subscribe registers a channel to receive frames.
-	// Returns error if id already exists or if bus is closed.
-	Subscribe(id string, ch chan<- Frame) error
-
-	// Unsubscribe removes a subscriber by id.
-	// Returns error if id not found or if bus is closed.
-	Unsubscribe(id string) error
-
-	// Publish sends frame to all subscribers (non-blocking).
-	// Drops frame for subscribers whose channels are full.
-	// Panics if bus is closed.
-	Publish(frame Frame)
-
-	// Stats returns current bus statistics snapshot.
-	Stats() BusStats
-
-	// Close stops the bus and prevents further operations.
-	// Subsequent Subscribe/Unsubscribe will return ErrBusClosed.
-	// Subsequent Publish will panic.
-	Close() error
-}
-
-var (
-	// ErrSubscriberExists is returned when Subscribe is called with a duplicate id.
-	ErrSubscriberExists = errors.New("subscriber id already exists")
-
-	// ErrSubscriberNotFound is returned when Unsubscribe is called with unknown id.
-	ErrSubscriberNotFound = errors.New("subscriber id not found")
-
-	// ErrBusClosed is returned when operations are attempted on a closed bus.
-	ErrBusClosed = errors.New("bus is closed")
 )
 
 // Frame represents a video frame to be distributed.
@@ -121,6 +48,41 @@ type SubscriberStats struct {
 
 	// Dropped is the number of frames dropped due to full channel
 	Dropped uint64
+}
+
+var (
+	// ErrSubscriberExists is returned when Subscribe is called with a duplicate id.
+	ErrSubscriberExists = errors.New("subscriber id already exists")
+
+	// ErrSubscriberNotFound is returned when Unsubscribe is called with unknown id.
+	ErrSubscriberNotFound = errors.New("subscriber id not found")
+
+	// ErrBusClosed is returned when operations are attempted on a closed bus.
+	ErrBusClosed = errors.New("bus is closed")
+)
+
+// Bus distributes frames to multiple subscribers with drop policy.
+type Bus interface {
+	// Subscribe registers a channel to receive frames.
+	// Returns error if id already exists or if bus is closed.
+	Subscribe(id string, ch chan<- Frame) error
+
+	// Unsubscribe removes a subscriber by id.
+	// Returns error if id not found or if bus is closed.
+	Unsubscribe(id string) error
+
+	// Publish sends frame to all subscribers (non-blocking).
+	// Drops frame for subscribers whose channels are full.
+	// Panics if bus is closed.
+	Publish(frame Frame)
+
+	// Stats returns current bus statistics snapshot.
+	Stats() BusStats
+
+	// Close stops the bus and prevents further operations.
+	// Subsequent Subscribe/Unsubscribe will return ErrBusClosed.
+	// Subsequent Publish will panic.
+	Close() error
 }
 
 // subscriberStats holds internal atomic counters.

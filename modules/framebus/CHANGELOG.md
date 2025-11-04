@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2025-11-04 - Quick Wins)
+- Helper functions `CalculateDropRate()` and `CalculateSubscriberDropRate()` for easier stats interpretation
+- ASCII diagram in README showing fan-out pattern with visual example
+- Usage examples of helper functions in README and example code
+- Comprehensive test coverage for helper functions (9 test cases)
+
+### Changed (2025-11-04 - Architecture Refactor)
+- **BREAKING**: Moved implementation to `internal/bus` package
+- Created public API surface in `framebus.go` using type aliases
+- Separated public interface from internal implementation
+- All tests passing with new structure (28 tests, race-free)
+- Examples updated and working
+- Zero breaking changes for consumers (backward compatible)
+
+### Technical Details
+- Public API: `framebus.go` (74 lines)
+- Implementation: `internal/bus/bus.go` (284 lines)
+- Tests: `internal/bus/bus_test.go` (450 lines)
+- Helpers: `helpers.go` + `helpers_test.go` (138 lines)
+
+---
+
+## [1.0.0] - 2025-11-04
+
 ### Added
 - Initial implementation of FrameBus with channel-based subscriber pattern
 - Non-blocking publish with drop policy (ADR-002)

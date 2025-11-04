@@ -59,6 +59,32 @@ func main() {
 }
 ```
 
+## Architecture
+
+### Fan-out Pattern
+
+```
+                ┌──────────────┐
+                │  Publisher   │
+                │ (30 FPS cam) │
+                └──────┬───────┘
+                       │ Publish(frame)
+                       ↓
+                ┌──────────────┐
+                │  FrameBus    │ (non-blocking fan-out)
+                │              │
+                └──┬───┬───┬───┘
+                   │   │   │
+        ┌──────────┘   │   └──────────┐
+        ↓              ↓              ↓
+  ┌──────────┐  ┌──────────┐  ┌──────────┐
+  │ Worker 1 │  │ Worker 2 │  │ Worker 3 │
+  │  (fast)  │  │  (slow)  │  │  (fast)  │
+  │  5ms/fr  │  │ 50ms/fr  │  │  5ms/fr  │
+  └──────────┘  └──────────┘  └──────────┘
+   Drops: 0%     Drops: 97%    Drops: 0%
+```
+
 ## Use Cases
 
 ### Orion Video Pipeline
@@ -107,6 +133,10 @@ type SubscriberStats struct {
     Sent    uint64
     Dropped uint64
 }
+
+// Helper functions
+func CalculateDropRate(stats BusStats) float64
+func CalculateSubscriberDropRate(stats BusStats, subscriberID string) float64
 ```
 
 ## Design Principles
@@ -139,6 +169,19 @@ In a 30 FPS stream with 1 Hz inference rate:
 - **29 frames dropped per second (97% drop rate)**
 
 This is intentional - processing the most recent frame is more valuable than queuing stale frames.
+
+**Helper functions for drop rate calculation:**
+```go
+stats := bus.Stats()
+
+// Global drop rate (0.0 to 1.0)
+globalRate := framebus.CalculateDropRate(stats)
+fmt.Printf("Drop rate: %.2f%%\n", globalRate*100)
+
+// Per-subscriber drop rate
+workerRate := framebus.CalculateSubscriberDropRate(stats, "worker-1")
+fmt.Printf("Worker drop rate: %.2f%%\n", workerRate*100)
+```
 
 ## Testing
 

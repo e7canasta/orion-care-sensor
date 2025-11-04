@@ -1,4 +1,4 @@
-package framebus
+package bus
 
 import (
 	"sync"

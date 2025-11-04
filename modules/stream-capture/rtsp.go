@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/e7canasta/orion-care-sensor/modules/stream-capture/internal/rtsp"
-	"github.com/e7canasta/orion-care-sensor/modules/stream-capture/internal/warmup"
 	"github.com/tinyzimmer/go-gst/gst"
 	"github.com/tinyzimmer/go-gst/gst/app"
 )
@@ -111,11 +110,14 @@ func NewRTSPStream(cfg RTSPConfig) (*RTSPStream, error) {
 // This method:
 //  1. Creates GStreamer pipeline
 //  2. Starts pipeline in Playing state
-//  3. Runs warm-up for 5 seconds to measure FPS stability
-//  4. Launches background goroutine for frame processing
-//  5. Returns frame channel (already stable)
+//  3. Launches background goroutines for frame processing and monitoring
+//  4. Returns frame channel immediately (non-blocking)
 //
-// Blocks for approximately 5 seconds during warm-up.
+// IMPORTANT: This method returns immediately. Frames will start arriving
+// asynchronously once the pipeline reaches PLAYING state (~3 seconds).
+//
+// For production use, call WarmupStream() separately after Start() to
+// measure FPS stability before processing frames.
 func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -163,6 +165,8 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 	}
 
 	// Launch goroutine to convert internal frames to public frames
+	// Capture ctx locally to avoid nil dereference during shutdown
+	localCtx := s.ctx
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -188,7 +192,7 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 			// Send to public channel (non-blocking)
 			select {
 			case s.frames <- publicFrame:
-			case <-s.ctx.Done():
+			case <-localCtx.Done():
 				return
 			}
 		}
@@ -238,53 +242,9 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 	s.wg.Add(1)
 	go s.runPipeline()
 
-	// Warm-up: measure FPS stability (5 seconds)
-	// Create a channel adapter to convert Frame to warmup.Frame
-	warmupFrames := make(chan warmup.Frame, 10)
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		defer close(warmupFrames)
-
-		timeout := time.After(5 * time.Second)
-		for {
-			select {
-			case <-timeout:
-				return
-			case <-s.ctx.Done():
-				return
-			case frame, ok := <-s.frames:
-				if !ok {
-					return
-				}
-				// Convert to warmup.Frame (only needs Seq and Timestamp)
-				warmupFrames <- warmup.Frame{
-					Seq:       frame.Seq,
-					Timestamp: frame.Timestamp,
-				}
-			}
-		}
-	}()
-
-	slog.Info("stream-capture: starting warm-up phase", "duration", "5s")
-	warmupStats, err := warmup.WarmupStream(s.ctx, warmupFrames, 5*time.Second)
-	if err != nil {
-		s.Stop() // Clean up on warm-up failure
-		return nil, fmt.Errorf("stream-capture: warm-up failed: %w", err)
-	}
-
-	// Log warm-up results
-	if !warmupStats.IsStable {
-		slog.Warn("stream-capture: stream FPS unstable",
-			"fps_mean", warmupStats.FPSMean,
-			"fps_stddev", warmupStats.FPSStdDev,
-		)
-	}
-
-	slog.Info("stream-capture: RTSP stream started successfully",
-		"warmup_frames", warmupStats.FramesReceived,
-		"fps_mean", fmt.Sprintf("%.2f", warmupStats.FPSMean),
-		"stable", warmupStats.IsStable,
+	slog.Info("stream-capture: RTSP stream started",
+		"url", s.rtspURL,
+		"note", "frames will arrive asynchronously once pipeline reaches PLAYING state",
 	)
 
 	return s.frames, nil

@@ -346,7 +346,7 @@ _Ninguno por ahora_
 
 ## 💡 Lecciones Aprendidas
 
-**Fecha de actualización**: 2025-11-03 (Phase 1-4 completadas)
+**Fecha de actualización**: 2025-11-04 (Phase 1-5 completadas + Testing real)
 
 ### Lo que Funcionó Bien ✅
 
@@ -378,6 +378,13 @@ _Ninguno por ahora_
    - Ejemplos de uso en docstrings
    - **Lección**: Documentar mientras codeas es más rápido que después
 
+6. **Testing con RTSP real detectó deadlock crítico** 🐛✅
+   - **Problema**: Warm-up síncrono en `Start()` causaba deadlock
+   - **Root cause**: `Start()` bloqueaba esperando frames, pero `runPipeline()` no generaba frames hasta después de `Start()`
+   - **Solución**: Seguir patrón del prototipo - `Start()` retorna inmediatamente, warm-up se hace externamente
+   - **Lección**: Testear con datos reales (RTSP stream) revela problemas que compilación no detecta
+   - **Commit**: rtsp.go:109-122 (eliminado warm-up síncrono de Start())
+
 ### Mejoras para Próximas Sesiones 📈
 
 1. **Revisar API de go-gst antes de asumir** 🔍
@@ -401,7 +408,7 @@ _Ninguno por ahora_
 
 ### Deuda Técnica Identificada 🚨
 
-**Actualización**: Toda la deuda técnica identificada ha sido saldada (2025-11-03)
+**Actualización**: Toda la deuda técnica identificada ha sido saldada (2025-11-04)
 
 1. ~~**Reconnection no implementada**~~ ✅ **SALDADA**
    - ✅ `runPipeline()` ahora usa `rtsp.RunWithReconnect()`
@@ -424,6 +431,15 @@ _Ninguno por ahora_
    - ✅ Interactive CLI con comandos: fps, stats, help, quit
    - ✅ Mide tiempo de interrupción del hot-reload
    - **Commit**: examples/hot_reload.go (nuevo archivo)
+
+5. ~~**Nil pointer dereference en shutdown (Double-Close Panic)**~~ ✅ **SALDADA** (2025-11-04)
+   - **Problema**: Goroutine de conversión de frames intentaba acceder `s.ctx.Done()` después de que `Stop()` estableciera `s.ctx = nil`
+   - **Root Cause**: Shutdown race condition - timeout de 3s permitía que goroutine sobreviviera al cleanup
+   - **Síntoma**: `panic: runtime error: invalid memory address or nil pointer dereference` en rtsp.go:193
+   - ✅ **Fix**: Captura de contexto en variable local (`localCtx := s.ctx`) antes de lanzar goroutine
+   - ✅ **Pattern aplicado**: "Capture by Value for Goroutine Isolation"
+   - ✅ **Testing**: Test real con 10 frames → shutdown limpio sin panic
+   - **Commit**: rtsp.go:169,195 (capture ctx locally)
 
 **Deuda técnica pendiente**: Ninguna 🎉
 
@@ -467,6 +483,6 @@ _Ninguno por ahora_
 
 ---
 
-**Última actualización**: 2025-11-03
-**Estado**: ✅ Phase 1-4 Complete (Deuda técnica: reconnection logic)
-**Próximo paso**: Phase 5 - Testing & Validation + Fix deuda técnica
+**Última actualización**: 2025-11-04
+**Estado**: ✅ Phase 1-5 Complete + Testing Real Exitoso
+**Próximo paso**: Sprint 1.2 - Worker Lifecycle Module

@@ -24,6 +24,10 @@ type Frame struct {
 type StreamStats struct {
 	// FrameCount is the total number of frames captured
 	FrameCount uint64
+	// FramesDropped is the total number of frames dropped (channel full)
+	FramesDropped uint64
+	// DropRate is the percentage of frames dropped (0-100)
+	DropRate float64
 	// FPSTarget is the configured target FPS
 	FPSTarget float64
 	// FPSReal is the measured real FPS
@@ -93,4 +97,22 @@ type RTSPConfig struct {
 	TargetFPS float64
 	// SourceStream identifies the stream (e.g., "LQ", "HQ")
 	SourceStream string
+}
+
+// WarmupStats contains statistics collected during stream warm-up phase
+type WarmupStats struct {
+	// FramesReceived is the number of frames received during warm-up
+	FramesReceived int
+	// Duration is the actual warm-up duration
+	Duration time.Duration
+	// FPSMean is the mean FPS across all frames
+	FPSMean float64
+	// FPSStdDev is the standard deviation of FPS
+	FPSStdDev float64
+	// FPSMin is the minimum instantaneous FPS
+	FPSMin float64
+	// FPSMax is the maximum instantaneous FPS
+	FPSMax float64
+	// IsStable is true if FPS is stable (stddev < 15% of mean)
+	IsStable bool
 }

@@ -35,15 +35,19 @@ type RTSPStream struct {
 	wg     sync.WaitGroup
 
 	// Statistics (atomic for thread-safety)
-	frameCount  uint64
-	bytesRead   uint64
-	reconnects  uint32
-	started     time.Time
-	lastFrameAt time.Time
+	frameCount    uint64
+	framesDropped uint64 // NEW: Counter for dropped frames
+	bytesRead     uint64
+	reconnects    uint32
+	started       time.Time
+	lastFrameAt   time.Time
 
 	// Reconnection state
 	reconnectState *rtsp.ReconnectState
 	reconnectCfg   rtsp.ReconnectConfig
+
+	// Shutdown protection (atomic flag to prevent double-close panic)
+	framesClosed atomic.Bool
 }
 
 // NewRTSPStream creates a new RTSP stream with fail-fast validation
@@ -189,11 +193,19 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 			s.lastFrameAt = time.Now()
 			s.mu.Unlock()
 
-			// Send to public channel (non-blocking)
+			// Send to public channel (non-blocking with drop tracking)
 			select {
 			case s.frames <- publicFrame:
+				// Frame sent successfully
 			case <-localCtx.Done():
 				return
+			default:
+				// Channel full - drop frame and track metric
+				atomic.AddUint64(&s.framesDropped, 1)
+				slog.Debug("stream-capture: dropping frame, channel full",
+					"seq", publicFrame.Seq,
+					"trace_id", publicFrame.TraceID,
+				)
 			}
 		}
 	}()
@@ -384,9 +396,14 @@ func (s *RTSPStream) Stop() error {
 		s.elements = nil
 	}
 
-	// Note: internal frame channel is closed by GStreamer cleanup
-	// Public frame channel is closed here
-	close(s.frames)
+	// Close frame channel (protected against double-close)
+	// Use atomic CompareAndSwap to ensure channel is closed exactly once
+	if s.framesClosed.CompareAndSwap(false, true) {
+		close(s.frames)
+		slog.Debug("stream-capture: frame channel closed")
+	} else {
+		slog.Debug("stream-capture: frame channel already closed, skipping")
+	}
 
 	// Log statistics
 	frameCount := atomic.LoadUint64(&s.frameCount)
@@ -403,6 +420,7 @@ func (s *RTSPStream) Stop() error {
 	s.cancel = nil
 	s.ctx = nil
 	s.frames = make(chan Frame, 10)
+	s.framesClosed.Store(false) // Reset flag for restart
 
 	return nil
 }
@@ -415,6 +433,7 @@ func (s *RTSPStream) Stats() StreamStats {
 	defer s.mu.RUnlock()
 
 	frameCount := atomic.LoadUint64(&s.frameCount)
+	framesDropped := atomic.LoadUint64(&s.framesDropped)
 	bytesRead := atomic.LoadUint64(&s.bytesRead)
 	reconnects := atomic.LoadUint32(s.reconnectState.Reconnects)
 
@@ -427,6 +446,13 @@ func (s *RTSPStream) Stats() StreamStats {
 		}
 	}
 
+	// Calculate drop rate
+	var dropRate float64
+	totalAttempts := frameCount + framesDropped
+	if totalAttempts > 0 {
+		dropRate = (float64(framesDropped) / float64(totalAttempts)) * 100.0
+	}
+
 	// Calculate latency (time since last frame)
 	var latencyMS int64
 	if !s.lastFrameAt.IsZero() {
@@ -437,15 +463,17 @@ func (s *RTSPStream) Stats() StreamStats {
 	isConnected := s.elements != nil && s.cancel != nil
 
 	return StreamStats{
-		FrameCount:   frameCount,
-		FPSTarget:    s.targetFPS,
-		FPSReal:      fpsReal,
-		LatencyMS:    latencyMS,
-		SourceStream: s.sourceStream,
-		Resolution:   fmt.Sprintf("%dx%d", s.width, s.height),
-		Reconnects:   reconnects,
-		BytesRead:    bytesRead,
-		IsConnected:  isConnected,
+		FrameCount:    frameCount,
+		FramesDropped: framesDropped,
+		DropRate:      dropRate,
+		FPSTarget:     s.targetFPS,
+		FPSReal:       fpsReal,
+		LatencyMS:     latencyMS,
+		SourceStream:  s.sourceStream,
+		Resolution:    fmt.Sprintf("%dx%d", s.width, s.height),
+		Reconnects:    reconnects,
+		BytesRead:     bytesRead,
+		IsConnected:   isConnected,
 	}
 }
 
@@ -495,6 +523,184 @@ func (s *RTSPStream) SetTargetFPS(fps float64) error {
 	)
 
 	return nil
+}
+
+// Warmup measures stream FPS stability over a specified duration
+//
+// This method should be called after Start() to measure the real FPS and
+// verify stream stability before processing frames. It consumes frames from
+// the stream for the specified duration and returns statistics.
+//
+// The method blocks for the entire duration while collecting statistics.
+//
+// Returns WarmupStats with FPS measurements, or an error if:
+//   - Stream is not running
+//   - Not enough frames received (< 2)
+//   - Context is cancelled
+//
+// Example:
+//   stream, _ := streamcapture.NewRTSPStream(cfg)
+//   frameChan, _ := stream.Start(ctx)
+//
+//   stats, err := stream.Warmup(ctx, 5*time.Second)
+//   if err != nil {
+//       log.Fatal("warmup failed:", err)
+//   }
+//   log.Printf("Stream stable: %v, FPS: %.2f", stats.IsStable, stats.FPSMean)
+//
+//   // Now consume frames normally
+//   for frame := range frameChan {
+//       // Process frame...
+//   }
+func (s *RTSPStream) Warmup(ctx context.Context, duration time.Duration) (*WarmupStats, error) {
+	s.mu.RLock()
+	if s.cancel == nil {
+		s.mu.RUnlock()
+		return nil, fmt.Errorf("stream-capture: stream not started")
+	}
+	s.mu.RUnlock()
+
+	slog.Info("stream-capture: starting warmup",
+		"duration", duration,
+		"reason", "measure real FPS and verify stability",
+	)
+
+	startTime := time.Now()
+	frameTimes := make([]time.Time, 0, 100) // Pre-allocate for ~30 FPS @ 3s
+
+	// Create timeout context
+	warmupCtx, cancel := context.WithTimeout(ctx, duration)
+	defer cancel()
+
+	// Consume frames during warmup
+	for {
+		select {
+		case <-warmupCtx.Done():
+			// Warmup duration elapsed - analyze statistics
+			goto analyze
+
+		case frame, ok := <-s.frames:
+			if !ok {
+				return nil, fmt.Errorf("stream-capture: stream closed during warmup")
+			}
+
+			// Record frame timestamp
+			frameTimes = append(frameTimes, frame.Timestamp)
+
+			slog.Debug("stream-capture: warmup frame received",
+				"seq", frame.Seq,
+				"frames_collected", len(frameTimes),
+			)
+		}
+	}
+
+analyze:
+	elapsed := time.Since(startTime)
+
+	// Validate minimum frames received
+	if len(frameTimes) < 2 {
+		return nil, fmt.Errorf(
+			"stream-capture: not enough frames received during warmup (got %d, need at least 2)",
+			len(frameTimes),
+		)
+	}
+
+	// Calculate FPS statistics (using internal warmup package logic)
+	stats := s.calculateWarmupStats(frameTimes, elapsed)
+
+	slog.Info("stream-capture: warmup complete",
+		"frames", stats.FramesReceived,
+		"duration", stats.Duration,
+		"fps_mean", fmt.Sprintf("%.2f", stats.FPSMean),
+		"fps_stddev", fmt.Sprintf("%.2f", stats.FPSStdDev),
+		"fps_range", fmt.Sprintf("%.1f-%.1f", stats.FPSMin, stats.FPSMax),
+		"stable", stats.IsStable,
+	)
+
+	if !stats.IsStable {
+		slog.Warn("stream-capture: stream FPS is unstable, may affect processing timing",
+			"fps_stddev", stats.FPSStdDev,
+			"fps_mean", stats.FPSMean,
+		)
+	}
+
+	return stats, nil
+}
+
+// calculateWarmupStats calculates FPS statistics from frame timestamps
+// This is similar to internal/warmup/stats.go but adapted for public API
+func (s *RTSPStream) calculateWarmupStats(frameTimes []time.Time, totalDuration time.Duration) *WarmupStats {
+	n := len(frameTimes)
+
+	// Calculate mean FPS (overall rate)
+	fpsMean := float64(n) / totalDuration.Seconds()
+
+	// Calculate instantaneous FPS for each interval
+	instantaneousFPS := make([]float64, 0, n-1)
+	for i := 1; i < n; i++ {
+		interval := frameTimes[i].Sub(frameTimes[i-1]).Seconds()
+		if interval > 0 {
+			fps := 1.0 / interval
+			instantaneousFPS = append(instantaneousFPS, fps)
+		}
+	}
+
+	// Handle edge case: no valid intervals
+	if len(instantaneousFPS) == 0 {
+		return &WarmupStats{
+			FramesReceived: n,
+			Duration:       totalDuration,
+			FPSMean:        fpsMean,
+			FPSStdDev:      0,
+			FPSMin:         0,
+			FPSMax:         0,
+			IsStable:       false,
+		}
+	}
+
+	// Find min/max instantaneous FPS
+	fpsMin := instantaneousFPS[0]
+	fpsMax := instantaneousFPS[0]
+	for _, fps := range instantaneousFPS {
+		if fps < fpsMin {
+			fpsMin = fps
+		}
+		if fps > fpsMax {
+			fpsMax = fps
+		}
+	}
+
+	// Calculate standard deviation of instantaneous FPS
+	var sumSquares float64
+	for _, fps := range instantaneousFPS {
+		diff := fps - fpsMean
+		sumSquares += diff * diff
+	}
+	fpsStdDev := 0.0
+	if len(instantaneousFPS) > 0 {
+		fpsStdDev = sumSquares / float64(len(instantaneousFPS))
+		// Calculate square root manually (simple Newton's method)
+		if fpsStdDev > 0 {
+			x := fpsStdDev
+			for i := 0; i < 10; i++ {
+				x = (x + fpsStdDev/x) / 2
+			}
+			fpsStdDev = x
+		}
+	}
+
+	// Determine stability: stddev < 15% of mean
+	isStable := fpsStdDev < (fpsMean * 0.15)
+
+	return &WarmupStats{
+		FramesReceived: n,
+		Duration:       totalDuration,
+		FPSMean:        fpsMean,
+		FPSStdDev:      fpsStdDev,
+		FPSMin:         fpsMin,
+		FPSMax:         fpsMax,
+		IsStable:       isStable,
+	}
 }
 
 // checkGStreamerAvailable checks if GStreamer is available

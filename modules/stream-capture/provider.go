@@ -1,21 +1,27 @@
 package streamcapture
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // StreamProvider defines the contract for video stream acquisition
 //
 // Implementations must guarantee:
-//   - Start() blocks until warm-up completes (~5 seconds)
+//   - Start() returns immediately (non-blocking)
 //   - Start() returns a channel that never closes until Stop()
 //   - Stop() is idempotent (safe to call multiple times)
 //   - Stats() is thread-safe (can be called from any goroutine)
 //   - SetTargetFPS() does not require restart (hot-reload)
+//   - Warmup() measures FPS stability (optional but recommended)
 type StreamProvider interface {
 	// Start initializes the stream and returns a read-only channel of frames.
 	//
-	// This method blocks for approximately 5 seconds during warm-up to measure
-	// FPS stability. Once warm-up completes, the returned channel will deliver
-	// frames at the configured target FPS.
+	// This method returns immediately. Frames will start arriving asynchronously
+	// once the GStreamer pipeline reaches PLAYING state (~3 seconds).
+	//
+	// IMPORTANT: Call Warmup() after Start() to measure FPS stability before
+	// processing frames in production.
 	//
 	// The returned channel will remain open until Stop() is called. Frames are
 	// sent using a non-blocking pattern - if the channel buffer is full, frames
@@ -24,7 +30,7 @@ type StreamProvider interface {
 	// Returns an error if:
 	//   - The stream cannot be established
 	//   - GStreamer is not available
-	//   - Warm-up fails to complete
+	//   - Pipeline creation fails
 	//
 	// Example:
 	//   stream, _ := NewRTSPStream(cfg)
@@ -32,6 +38,11 @@ type StreamProvider interface {
 	//   if err != nil {
 	//       log.Fatal(err)
 	//   }
+	//
+	//   // Recommended: Warmup before processing
+	//   stats, _ := stream.Warmup(ctx, 5*time.Second)
+	//   log.Printf("Stream stable: %v, FPS: %.2f", stats.IsStable, stats.FPSMean)
+	//
 	//   for frame := range frameChan {
 	//       // Process frame...
 	//   }
@@ -80,4 +91,34 @@ type StreamProvider interface {
 	// Example:
 	//   err := stream.SetTargetFPS(0.5)  // Change to 0.5 Hz (1 frame every 2 seconds)
 	SetTargetFPS(fps float64) error
+
+	// Warmup measures stream FPS stability over a specified duration.
+	//
+	// This method should be called after Start() to measure the real FPS and
+	// verify stream stability before processing frames. It consumes frames from
+	// the stream for the specified duration and returns statistics.
+	//
+	// The method blocks for the entire duration while collecting statistics.
+	// Typical duration is 5 seconds to allow pipeline stabilization.
+	//
+	// Returns WarmupStats with FPS measurements, or an error if:
+	//   - Stream is not running
+	//   - Not enough frames received (< 2)
+	//   - Context is cancelled
+	//
+	// Example:
+	//   stream, _ := NewRTSPStream(cfg)
+	//   frameChan, _ := stream.Start(ctx)
+	//
+	//   stats, err := stream.Warmup(ctx, 5*time.Second)
+	//   if err != nil {
+	//       log.Fatal("warmup failed:", err)
+	//   }
+	//   log.Printf("Stream stable: %v, FPS: %.2f", stats.IsStable, stats.FPSMean)
+	//
+	//   // Now consume frames normally
+	//   for frame := range frameChan {
+	//       // Process frame...
+	//   }
+	Warmup(ctx context.Context, duration time.Duration) (*WarmupStats, error)
 }

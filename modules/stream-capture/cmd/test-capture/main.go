@@ -144,8 +144,34 @@ func main() {
 		log.Fatalf("Failed to start stream: %v", err)
 	}
 
-	slog.Info("Stream started successfully, waiting for frames...")
+	slog.Info("Stream started successfully")
+
+	// Warmup: measure FPS stability before processing frames
 	fmt.Printf("\n")
+	fmt.Printf("Running warmup (5 seconds) to measure stream stability...\n")
+	warmupStats, err := stream.Warmup(ctx, 5*time.Second)
+	if err != nil {
+		log.Fatalf("Warmup failed: %v", err)
+	}
+
+	fmt.Printf("\n")
+	fmt.Printf("╭─────────────────────────────────────────────────────────╮\n")
+	fmt.Printf("│ Warmup Complete\n")
+	fmt.Printf("├─────────────────────────────────────────────────────────┤\n")
+	fmt.Printf("│ Frames Received:    %6d frames\n", warmupStats.FramesReceived)
+	fmt.Printf("│ Duration:           %6.1f seconds\n", warmupStats.Duration.Seconds())
+	fmt.Printf("│ FPS Mean:           %6.2f fps\n", warmupStats.FPSMean)
+	fmt.Printf("│ FPS StdDev:         %6.2f fps\n", warmupStats.FPSStdDev)
+	fmt.Printf("│ FPS Range:          %6.1f - %.1f fps\n", warmupStats.FPSMin, warmupStats.FPSMax)
+	fmt.Printf("│ Stable:             %6v\n", warmupStats.IsStable)
+	fmt.Printf("╰─────────────────────────────────────────────────────────╯\n")
+
+	if !warmupStats.IsStable {
+		fmt.Printf("\n⚠️  WARNING: Stream FPS is unstable (high variance)\n")
+	}
+
+	fmt.Printf("\n")
+	fmt.Printf("Starting frame capture...\n")
 	fmt.Printf("Press Ctrl+C to stop gracefully\n")
 	fmt.Printf("═══════════════════════════════════════════════════════════\n\n")
 
@@ -173,9 +199,14 @@ func main() {
 				fmt.Printf("├─────────────────────────────────────────────────────────┤\n")
 				fmt.Printf("│ Frames Captured:    %6d frames\n", stats.FrameCount)
 				fmt.Printf("│ Frames Saved:       %6d frames\n", framesSaved)
+				// Show stream-level drops (from channel full)
+				if stats.FramesDropped > 0 || stats.DropRate > 0 {
+					fmt.Printf("│ Stream Drops:       %6d frames (%.1f%%)\n", stats.FramesDropped, stats.DropRate)
+				}
+				// Show local drops (from save failures)
 				if *outputDir != "" && stats.FrameCount > 0 {
 					dropRate := float64(framesDropped) / float64(stats.FrameCount) * 100
-					fmt.Printf("│ Frames Dropped:     %6d frames (%.1f%%)\n", framesDropped, dropRate)
+					fmt.Printf("│ Save Drops:         %6d frames (%.1f%%)\n", framesDropped, dropRate)
 				}
 				fmt.Printf("│ Target FPS:         %6.2f fps\n", stats.FPSTarget)
 				fmt.Printf("│ Real FPS:           %6.2f fps\n", stats.FPSReal)

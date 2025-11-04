@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
-
-	streamcapture "github.com/e7canasta/orion-care-sensor/modules/stream-capture"
 )
+
+// Frame is a minimal frame struct for internal use (avoids import cycle)
+type Frame struct {
+	Seq       uint64
+	Timestamp time.Time
+}
 
 // WarmupStats contains statistics collected during warm-up phase
 type WarmupStats struct {
@@ -37,7 +41,7 @@ type WarmupStats struct {
 //   - Context is cancelled
 func WarmupStream(
 	ctx context.Context,
-	frames <-chan streamcapture.Frame,
+	frames <-chan Frame,
 	duration time.Duration,
 ) (*WarmupStats, error) {
 	slog.Info("warmup: starting stream warm-up",

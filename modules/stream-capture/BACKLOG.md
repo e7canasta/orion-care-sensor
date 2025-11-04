@@ -401,28 +401,31 @@ _Ninguno por ahora_
 
 ### Deuda Técnica Identificada 🚨
 
-1. **Reconnection no implementada** (Prioridad: ALTA)
-   - `runPipeline()` no usa `rtsp.RunWithReconnect()`
-   - Pipeline error → log + return (no retry)
-   - **Impacto**: Stream no se recupera de fallas de red
-   - **Fix**: Integrar `RunWithReconnect()` en siguiente iteración
+**Actualización**: Toda la deuda técnica identificada ha sido saldada (2025-11-03)
 
-2. **Internal frame channel no se cierra explícitamente** (Prioridad: MEDIA)
-   - `internalFrames` canal creado en `Start()`
-   - Se cierra implícitamente cuando GStreamer termina
-   - **Impacto**: Potencial goroutine leak si pipeline falla sin cerrar canal
-   - **Fix**: Agregar `defer close(internalFrames)` en goroutine de conversión
+1. ~~**Reconnection no implementada**~~ ✅ **SALDADA**
+   - ✅ `runPipeline()` ahora usa `rtsp.RunWithReconnect()`
+   - ✅ Pipeline error → exponential backoff retry (1s→16s, max 5)
+   - ✅ Reset counter al alcanzar PLAYING state
+   - **Commit**: rtsp.go:286-372 (monitorPipeline + runPipeline refactor)
 
-3. **lastFrameAt no se actualiza** (Prioridad: BAJA)
-   - `Stats()` calcula latency desde `lastFrameAt`
-   - Pero `lastFrameAt` nunca se setea (siempre zero)
-   - **Impacto**: Latency metric siempre es 0
-   - **Fix**: Actualizar `lastFrameAt` en callback o goroutine de conversión
+2. ~~**Internal frame channel no se cierra explícitamente**~~ ✅ **SALDADA**
+   - ✅ `defer close(internalFrames)` agregado en goroutine
+   - ✅ No goroutine leaks
+   - **Commit**: rtsp.go:169
 
-4. **No hay ejemplo de hot-reload FPS** (Prioridad: BAJA)
-   - `examples/simple_capture.go` no demuestra `SetTargetFPS()`
-   - **Impacto**: Feature no validada manualmente
-   - **Fix**: Crear `examples/hot_reload.go` en Phase 5
+3. ~~**lastFrameAt no se actualiza**~~ ✅ **SALDADA**
+   - ✅ `lastFrameAt` se actualiza en cada frame
+   - ✅ Latency metric (`Stats().LatencyMS`) funcional
+   - **Commit**: rtsp.go:183-186
+
+4. ~~**No hay ejemplo de hot-reload FPS**~~ ✅ **SALDADA**
+   - ✅ `examples/hot_reload.go` creado (252 líneas)
+   - ✅ Interactive CLI con comandos: fps, stats, help, quit
+   - ✅ Mide tiempo de interrupción del hot-reload
+   - **Commit**: examples/hot_reload.go (nuevo archivo)
+
+**Deuda técnica pendiente**: Ninguna 🎉
 
 ### Métricas de Implementación 📊
 

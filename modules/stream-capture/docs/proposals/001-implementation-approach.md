@@ -12,6 +12,34 @@ Implement Stream Capture module (Sprint 1.1) with RTSP capture, reconnection, an
 
 ---
 
+### **Sprint 1: Bounded Contexts Básicos (2 semanas)**
+
+#### **1.1: Stream Capture Module**
+
+```
+internal/stream/
+├── capture.go          # RTSP capture, reconnection
+├── framebus.go         # Non-blocking fan-out (existente)
+└── warm_up.go          # FPS measurement (existente)
+```
+
+**Responsabilidad:**
+
+- ✅ Capturar frames RTSP
+- ✅ Reconexión automática
+- ✅ FPS adaptativo
+
+**Anti-responsabilidad:**
+
+- ❌ NO procesa frames
+- ❌ NO decide qué capturar
+
+**Tests:**
+
+- Unit: Mock RTSP, validar FPS
+- Integration: RTSP real, reconexión
+
+---
 ## 📋 Implementation Strategy
 
 ### Phase 1: Setup & Public API (Day 1-2)

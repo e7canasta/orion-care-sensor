@@ -202,6 +202,13 @@ See [docs/DESIGN.md](docs/DESIGN.md) for architectural decisions specific to thi
 
 For workspace-level ADRs, see [../../docs/DESIGN/ADR/](../../docs/DESIGN/ADR/).
 
+## REFERENCIAS DE DISENIO  - ORION 1.0 (Prototipo) ##
+
+[[2.2-stream-providers]]
+
+[[2.4-frame-distribution]]
+
+
 ---
 
 ## 🔗 References

@@ -1,2 +1,6 @@
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/mattn/go-pointer v0.0.1/go.mod h1:2zXcozF6qYGgmsG+SeTZz3oAbFLdD3OWqnUbNvJZAlc=
+github.com/tinyzimmer/go-glib v0.0.25/go.mod h1:ltV0gO6xNFzZhsIRbFXv8RTq9NGoNT2dmAER4YmZfaM=
+github.com/tinyzimmer/go-gst v0.2.33 h1:wdwUYoN7dkWGUTrZIgB9Mp5LMRr/Sld5PVGRsE7/O9s=
+github.com/tinyzimmer/go-gst v0.2.33/go.mod h1:0hI+orMYVT61TEh429LvmoV9UmyqjeTqdJ3DW2TX114=

@@ -180,11 +180,13 @@ func main() {
 		fmt.Printf("│ FPS Mean:           %6.2f fps\n", warmupStats.FPSMean)
 		fmt.Printf("│ FPS StdDev:         %6.2f fps\n", warmupStats.FPSStdDev)
 		fmt.Printf("│ FPS Range:          %6.1f - %.1f fps\n", warmupStats.FPSMin, warmupStats.FPSMax)
+		fmt.Printf("│ Jitter Mean:        %6.3f s\n", warmupStats.JitterMean)
+		fmt.Printf("│ Jitter Max:         %6.3f s\n", warmupStats.JitterMax)
 		fmt.Printf("│ Stable:             %6v\n", warmupStats.IsStable)
 		fmt.Printf("╰─────────────────────────────────────────────────────────╯\n")
 
 		if !warmupStats.IsStable {
-			fmt.Printf("\n⚠️  WARNING: Stream FPS is unstable (high variance)\n")
+			fmt.Printf("\n⚠️  WARNING: Stream is unstable (high FPS variance or jitter)\n")
 		}
 
 		fmt.Printf("\n")
@@ -232,6 +234,17 @@ func main() {
 				fmt.Printf("│ Bytes Read:         %6.2f MB\n", float64(stats.BytesRead)/1024/1024)
 				fmt.Printf("│ Reconnects:         %6d\n", stats.Reconnects)
 				fmt.Printf("│ Connected:          %6v\n", stats.IsConnected)
+				// Show error telemetry if any errors occurred
+				totalErrors := stats.ErrorsNetwork + stats.ErrorsCodec + stats.ErrorsAuth + stats.ErrorsUnknown
+				if totalErrors > 0 {
+					fmt.Printf("├─────────────────────────────────────────────────────────┤\n")
+					fmt.Printf("│ Error Telemetry\n")
+					fmt.Printf("├─────────────────────────────────────────────────────────┤\n")
+					fmt.Printf("│ Network Errors:     %6d\n", stats.ErrorsNetwork)
+					fmt.Printf("│ Codec Errors:       %6d\n", stats.ErrorsCodec)
+					fmt.Printf("│ Auth Errors:        %6d\n", stats.ErrorsAuth)
+					fmt.Printf("│ Unknown Errors:     %6d\n", stats.ErrorsUnknown)
+				}
 				fmt.Printf("╰─────────────────────────────────────────────────────────╯\n")
 				fmt.Printf("\n")
 			}

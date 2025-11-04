@@ -44,7 +44,8 @@ func (e ErrorCategory) String() string {
 // - Auth issues (credentials needed)
 // - Unknown issues (need investigation)
 //
-// Classification is based on GStreamer error domain and code, plus error message heuristics.
+// Classification is based on error message heuristics and error codes.
+// Note: go-gst's GError does not expose Domain(), so we rely on string matching.
 func ClassifyGStreamerError(gerr *gst.GError) ErrorCategory {
 	if gerr == nil {
 		return ErrCategoryUnknown
@@ -53,71 +54,19 @@ func ClassifyGStreamerError(gerr *gst.GError) ErrorCategory {
 	errMsg := strings.ToLower(gerr.Error())
 	debugStr := strings.ToLower(gerr.DebugString())
 
-	// Classify by GStreamer error domain
-	switch gerr.Domain() {
-	case gst.ResourceError:
-		// Resource errors typically indicate network or file issues
-		switch gerr.Code() {
-		case int(gst.ResourceErrorNotFound):
-			// Camera not found, DNS failure, or URL invalid
-			return ErrCategoryNetwork
-		case int(gst.ResourceErrorOpenRead), int(gst.ResourceErrorRead):
-			// Connection issues, timeouts
-			return ErrCategoryNetwork
-		case int(gst.ResourceErrorOpenWrite), int(gst.ResourceErrorWrite):
-			// Write failures (unlikely in RTSP source)
-			return ErrCategoryNetwork
-		case int(gst.ResourceErrorSettings):
-			// Configuration issues (could be auth)
-			if containsAuthKeywords(errMsg, debugStr) {
-				return ErrCategoryAuth
-			}
-			return ErrCategoryNetwork
-		default:
-			// Other resource errors default to network
-			return ErrCategoryNetwork
-		}
-
-	case gst.StreamError:
-		// Stream errors indicate codec/format issues
-		switch gerr.Code() {
-		case int(gst.StreamErrorDecode), int(gst.StreamErrorCodecNotFound):
-			// Decode failures, missing codec
-			return ErrCategoryCodec
-		case int(gst.StreamErrorFormat), int(gst.StreamErrorWrongType):
-			// Format negotiation failures
-			return ErrCategoryCodec
-		case int(gst.StreamErrorDemux), int(gst.StreamErrorMux):
-			// Demuxing issues (corrupt stream)
-			return ErrCategoryCodec
-		default:
-			return ErrCategoryCodec
-		}
-
-	case gst.CoreError:
-		// Core errors can be various issues
-		if containsAuthKeywords(errMsg, debugStr) {
-			return ErrCategoryAuth
-		}
-		// Core errors often indicate missing plugins or negotiation failures (codec-related)
-		return ErrCategoryCodec
-
-	case gst.LibraryError:
-		// Library errors typically indicate plugin/codec issues
-		return ErrCategoryCodec
-	}
-
-	// Fallback: Heuristic-based classification using error message keywords
+	// Priority 1: Check for authentication errors (most specific)
 	if containsAuthKeywords(errMsg, debugStr) {
 		return ErrCategoryAuth
 	}
 
-	if containsNetworkKeywords(errMsg, debugStr) {
-		return ErrCategoryNetwork
-	}
-
+	// Priority 2: Check for codec/format errors
 	if containsCodecKeywords(errMsg, debugStr) {
 		return ErrCategoryCodec
+	}
+
+	// Priority 3: Check for network errors (most common)
+	if containsNetworkKeywords(errMsg, debugStr) {
+		return ErrCategoryNetwork
 	}
 
 	// Default to unknown if no classification matches

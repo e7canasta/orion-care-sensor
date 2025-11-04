@@ -195,6 +195,12 @@ type WarmupStats struct {
 	FPSMin float64
 	// FPSMax is the maximum instantaneous FPS
 	FPSMax float64
-	// IsStable is true if FPS is stable (stddev < 15% of mean)
+	// IsStable is true if FPS is stable (stddev < 15% of mean AND jitter < 20%)
 	IsStable bool
+	// JitterMean is the average inter-frame interval variance (seconds)
+	JitterMean float64
+	// JitterStdDev is the standard deviation of jitter (seconds)
+	JitterStdDev float64
+	// JitterMax is the maximum jitter observed (seconds)
+	JitterMax float64
 }

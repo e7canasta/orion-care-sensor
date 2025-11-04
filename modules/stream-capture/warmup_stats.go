@@ -44,6 +44,9 @@ func CalculateFPSStats(frameTimes []time.Time, totalDuration time.Duration) *War
 			FPSMin:         0,
 			FPSMax:         0,
 			IsStable:       false,
+			JitterMean:     0,
+			JitterStdDev:   0,
+			JitterMax:      0,
 		}
 	}
 
@@ -67,8 +70,40 @@ func CalculateFPSStats(frameTimes []time.Time, totalDuration time.Duration) *War
 	}
 	fpsStdDev := math.Sqrt(sumSquares / float64(len(instantaneousFPS)))
 
-	// Determine stability: stddev < 15% of mean
-	isStable := fpsStdDev < (fpsMean * 0.15)
+	// Calculate jitter statistics
+	// Jitter = variance from expected inter-frame interval
+	expectedInterval := 1.0 / fpsMean // Expected time between frames (seconds)
+
+	jitters := make([]float64, 0, n-1)
+	for i := 1; i < n; i++ {
+		actualInterval := frameTimes[i].Sub(frameTimes[i-1]).Seconds()
+		jitter := math.Abs(actualInterval - expectedInterval)
+		jitters = append(jitters, jitter)
+	}
+
+	// Calculate jitter mean
+	var jitterSum float64
+	jitterMax := 0.0
+	for _, j := range jitters {
+		jitterSum += j
+		if j > jitterMax {
+			jitterMax = j
+		}
+	}
+	jitterMean := jitterSum / float64(len(jitters))
+
+	// Calculate jitter standard deviation
+	var jitterSumSquares float64
+	for _, j := range jitters {
+		diff := j - jitterMean
+		jitterSumSquares += diff * diff
+	}
+	jitterStdDev := math.Sqrt(jitterSumSquares / float64(len(jitters)))
+
+	// Determine stability: stddev < 15% of mean AND jitter < 20% of expected interval
+	fpsStable := fpsStdDev < (fpsMean * 0.15)
+	jitterStable := jitterMean < (expectedInterval * 0.20)
+	isStable := fpsStable && jitterStable
 
 	return &WarmupStats{
 		FramesReceived: n,
@@ -78,5 +113,8 @@ func CalculateFPSStats(frameTimes []time.Time, totalDuration time.Duration) *War
 		FPSMin:         fpsMin,
 		FPSMax:         fpsMax,
 		IsStable:       isStable,
+		JitterMean:     jitterMean,
+		JitterStdDev:   jitterStdDev,
+		JitterMax:      jitterMax,
 	}
 }

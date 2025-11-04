@@ -37,11 +37,17 @@ type RTSPStream struct {
 
 	// Statistics (atomic for thread-safety)
 	frameCount    uint64
-	framesDropped uint64 // NEW: Counter for dropped frames
+	framesDropped uint64 // Counter for dropped frames
 	bytesRead     uint64
 	reconnects    uint32
 	started       time.Time
 	lastFrameAt   time.Time
+
+	// Error telemetry (atomic for thread-safety)
+	errorsNetwork uint64 // Network-related errors (connection, timeout)
+	errorsCodec   uint64 // Codec/stream errors (decode failures)
+	errorsAuth    uint64 // Authentication/authorization errors
+	errorsUnknown uint64 // Unclassified errors
 
 	// Reconnection state
 	reconnectState *rtsp.ReconnectState
@@ -356,9 +362,26 @@ func (s *RTSPStream) monitorPipeline(ctx context.Context) error {
 
 			case gst.MessageError:
 				gerr := msg.ParseError()
+
+				// Classify error for telemetry
+				category := rtsp.ClassifyGStreamerError(gerr)
+
+				// Update error counters (atomic)
+				switch category {
+				case rtsp.ErrCategoryNetwork:
+					atomic.AddUint64(&s.errorsNetwork, 1)
+				case rtsp.ErrCategoryCodec:
+					atomic.AddUint64(&s.errorsCodec, 1)
+				case rtsp.ErrCategoryAuth:
+					atomic.AddUint64(&s.errorsAuth, 1)
+				case rtsp.ErrCategoryUnknown:
+					atomic.AddUint64(&s.errorsUnknown, 1)
+				}
+
 				slog.Error("stream-capture: pipeline error",
 					"error", gerr.Error(),
 					"debug", gerr.DebugString(),
+					"category", category.String(),
 					"rtsp_url", s.rtspURL,
 					"resolution", fmt.Sprintf("%dx%d", s.width, s.height),
 					"uptime", time.Since(s.started),
@@ -366,7 +389,7 @@ func (s *RTSPStream) monitorPipeline(ctx context.Context) error {
 					"reconnects", atomic.LoadUint32(s.reconnectState.Reconnects),
 				)
 				// Return error to trigger reconnection
-				return fmt.Errorf("pipeline error: %s", gerr.Error())
+				return fmt.Errorf("pipeline error [%s]: %s", category.String(), gerr.Error())
 
 			case gst.MessageStateChanged:
 				if msg.Source() == s.elements.Pipeline.GetName() {
@@ -499,6 +522,12 @@ func (s *RTSPStream) Stats() StreamStats {
 	// Determine connection status
 	isConnected := s.elements != nil && s.cancel != nil
 
+	// Load error counters
+	errorsNetwork := atomic.LoadUint64(&s.errorsNetwork)
+	errorsCodec := atomic.LoadUint64(&s.errorsCodec)
+	errorsAuth := atomic.LoadUint64(&s.errorsAuth)
+	errorsUnknown := atomic.LoadUint64(&s.errorsUnknown)
+
 	return StreamStats{
 		FrameCount:    frameCount,
 		FramesDropped: framesDropped,
@@ -511,6 +540,10 @@ func (s *RTSPStream) Stats() StreamStats {
 		Reconnects:    reconnects,
 		BytesRead:     bytesRead,
 		IsConnected:   isConnected,
+		ErrorsNetwork: errorsNetwork,
+		ErrorsCodec:   errorsCodec,
+		ErrorsAuth:    errorsAuth,
+		ErrorsUnknown: errorsUnknown,
 	}
 }
 

@@ -14,6 +14,17 @@ import (
 	"github.com/tinyzimmer/go-gst/gst/app"
 )
 
+const (
+	// defaultFrameBufferSize is the number of frames buffered in the output channel.
+	// This provides a small buffer to handle temporary processing delays without blocking
+	// the GStreamer pipeline, while keeping memory usage bounded.
+	defaultFrameBufferSize = 10
+
+	// shutdownTimeout is the maximum time to wait for graceful pipeline shutdown.
+	// After this timeout, the pipeline is forcefully stopped to prevent hangs.
+	shutdownTimeout = 3 * time.Second
+)
+
 // RTSPStream implements StreamProvider using GStreamer for RTSP streaming
 type RTSPStream struct {
 	// Configuration
@@ -71,26 +82,9 @@ type RTSPStream struct {
 //
 // Returns an error if validation fails or GStreamer is not available.
 func NewRTSPStream(cfg RTSPConfig) (*RTSPStream, error) {
-	// Fail-fast validation: RTSP URL
-	if cfg.URL == "" {
-		return nil, fmt.Errorf("stream-capture: RTSP URL is required")
-	}
-
-	// Fail-fast validation: Target FPS
-	if cfg.TargetFPS < 0.1 || cfg.TargetFPS > 30 {
-		return nil, fmt.Errorf(
-			"stream-capture: invalid FPS %.2f (must be 0.1-30)",
-			cfg.TargetFPS,
-		)
-	}
-
-	// Fail-fast validation: Resolution
-	width, height := cfg.Resolution.Dimensions()
-	if width == 0 || height == 0 {
-		return nil, fmt.Errorf(
-			"stream-capture: invalid resolution %v",
-			cfg.Resolution,
-		)
+	// Fail-fast validation: Delegate to config (SRP)
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("stream-capture: %w", err)
 	}
 
 	// Fail-fast validation: GStreamer availability
@@ -104,6 +98,9 @@ func NewRTSPStream(cfg RTSPConfig) (*RTSPStream, error) {
 			return nil, fmt.Errorf("stream-capture: VAAPI not available: %w", err)
 		}
 	}
+
+	// Extract dimensions after validation
+	width, height := cfg.Resolution.Dimensions()
 
 	// Build reconnect config from user settings (or defaults)
 	reconnectCfg := rtsp.DefaultReconnectConfig()
@@ -124,7 +121,7 @@ func NewRTSPStream(cfg RTSPConfig) (*RTSPStream, error) {
 		targetFPS:    cfg.TargetFPS,
 		sourceStream: cfg.SourceStream,
 		acceleration: cfg.Acceleration,
-		frames:       make(chan Frame, 10), // Buffer 10 frames
+		frames:       make(chan Frame, defaultFrameBufferSize),
 		reconnectCfg: reconnectCfg,
 		reconnectState: &rtsp.ReconnectState{
 			Reconnects: new(uint32),
@@ -417,7 +414,7 @@ func (s *RTSPStream) Stop() error {
 	select {
 	case <-done:
 		slog.Debug("stream-capture: goroutines stopped cleanly")
-	case <-time.After(3 * time.Second):
+	case <-time.After(shutdownTimeout):
 		slog.Warn("stream-capture: stop timeout exceeded, some goroutines may still be running")
 	}
 
@@ -452,7 +449,7 @@ func (s *RTSPStream) Stop() error {
 	// Reset state for potential restart
 	s.cancel = nil
 	s.ctx = nil
-	s.frames = make(chan Frame, 10)
+	s.frames = make(chan Frame, defaultFrameBufferSize)
 	s.framesClosed.Store(false) // Reset flag for restart
 
 	return nil
@@ -655,45 +652,19 @@ func (s *RTSPStream) Warmup(ctx context.Context, duration time.Duration) (*Warmu
 	}
 	s.mu.RUnlock()
 
-	// Create adapter channel for warmup helper (converts Frame → warmup.Frame)
-	// This avoids import cycle and allows warmup package to be independent
-	warmupFrames := make(chan warmup.Frame, 10)
-
-	// Launch goroutine to convert frames
-	go func() {
-		defer close(warmupFrames)
-
-		// Create timeout context for adapter goroutine
-		warmupCtx, cancel := context.WithTimeout(ctx, duration+1*time.Second) // +1s buffer
-		defer cancel()
-
-		for {
-			select {
-			case <-warmupCtx.Done():
-				return
-			case frame, ok := <-s.frames:
-				if !ok {
-					return
-				}
-				// Convert streamcapture.Frame → warmup.Frame (minimal subset)
-				warmupFrame := warmup.Frame{
-					Seq:       frame.Seq,
-					Timestamp: frame.Timestamp,
-				}
-				select {
-				case warmupFrames <- warmupFrame:
-					// Sent successfully
-				case <-warmupCtx.Done():
-					return
-				}
+	// Delegate to warmup adapter (handles frame conversion and statistics)
+	internalStats, err := warmup.WarmupWithAdapter(
+		ctx,
+		s.frames,
+		duration,
+		func(f Frame) warmup.Frame {
+			return warmup.Frame{
+				Seq:       f.Seq,
+				Timestamp: f.Timestamp,
 			}
-		}
-	}()
-
-	// Delegate to warmup helper (includes fail-fast validation)
-	internalStats, err := warmup.WarmupStream(ctx, warmupFrames, duration)
+		},
+	)
 	if err != nil {
-		// Wrap error with module prefix
 		return nil, fmt.Errorf("stream-capture: warmup failed: %w", err)
 	}
 

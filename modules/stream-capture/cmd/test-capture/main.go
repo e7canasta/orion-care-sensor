@@ -67,14 +67,18 @@ func main() {
 	// Parse resolution
 	var res streamcapture.Resolution
 	switch *resolution {
+	case "480p":
+		res = streamcapture.Res480p
 	case "512p":
 		res = streamcapture.Res512p
+	case "640p":
+		res = streamcapture.Res640p
 	case "720p":
 		res = streamcapture.Res720p
 	case "1080p":
 		res = streamcapture.Res1080p
 	default:
-		log.Fatalf("Invalid resolution: %s (must be 512p, 720p, or 1080p)", *resolution)
+		log.Fatalf("Invalid resolution: %s (must be 480p, 512p, 640p, 720p, or 1080p)", *resolution)
 	}
 
 	// Validate output format

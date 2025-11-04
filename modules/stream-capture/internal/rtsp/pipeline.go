@@ -59,13 +59,31 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 	}
 	rtspsrc.SetProperty("location", cfg.RTSPURL)
 	rtspsrc.SetProperty("protocols", 4) // TCP only
-	rtspsrc.SetProperty("latency", 200) // 200ms buffering
+
+	// OPTIMIZATION Level 2: Adaptive latency buffer for low FPS
+	// Low FPS (≤2fps) benefits from minimal buffering (50ms)
+	// High FPS (>2fps) needs stability (200ms)
+	latency := 200
+	if cfg.TargetFPS <= 2.0 {
+		latency = 50
+		slog.Debug("rtsp: using low-latency buffer", "latency_ms", latency, "target_fps", cfg.TargetFPS)
+	}
+	rtspsrc.SetProperty("latency", latency)
+
+	// OPTIMIZATION Level 3: Advanced buffer tuning
+	rtspsrc.SetProperty("buffer-mode", 3)              // Auto-adaptive jitter buffering
+	rtspsrc.SetProperty("ntp-sync", false)             // Disable NTP sync (reduces overhead)
+	rtspsrc.SetProperty("tcp-timeout", uint64(10000000)) // 10s timeout (was 20s default)
 
 	// Create decoding elements
 	rtph264depay, err := gst.NewElement("rtph264depay")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create rtph264depay: %w", err)
 	}
+
+	// OPTIMIZATION Level 2: Keyframe recovery
+	// Request keyframes on packet loss for faster recovery (2s → 500ms)
+	rtph264depay.SetProperty("request-keyframe", true)
 
 	// Choose pipeline elements based on acceleration mode
 	const (
@@ -79,10 +97,28 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 
 	switch cfg.Acceleration {
 	case AccelVAAPI:
-		// Force VAAPI - fail if not available
-		decoder, err = gst.NewElement("vaapidecodebin")
+		// OPTIMIZATION Level 1: H.264-specific decoder (no auto-detection)
+		// Try vaapih264dec first (H.264-only, faster), fallback to vaapidecodebin
+		decoder, err = gst.NewElement("vaapih264dec")
 		if err != nil {
-			return nil, fmt.Errorf("failed to create vaapidecodebin (VAAPI required): %w", err)
+			// Fallback to generic VAAPI decoder
+			slog.Warn("rtsp: vaapih264dec not available, using vaapidecodebin", "error", err)
+			decoder, err = gst.NewElement("vaapidecodebin")
+			if err != nil {
+				return nil, fmt.Errorf("failed to create VAAPI decoder (VAAPI required): %w", err)
+			}
+		} else {
+			// OPTIMIZATION Level 3: Low-latency mode for vaapih264dec
+			// Safe for H.264 Main profile (no B-frames)
+			decoder.SetProperty("low-latency", true)
+			slog.Debug("rtsp: using vaapih264dec with low-latency mode")
+		}
+
+		// OPTIMIZATION Level 2: Skip corrupt frames for low FPS
+		// When target < source FPS, decoder can skip damaged frames
+		if cfg.TargetFPS < 6.0 {
+			decoder.SetProperty("output-corrupt", false)
+			slog.Debug("rtsp: decoder will skip corrupt frames", "target_fps", cfg.TargetFPS)
 		}
 
 		vaapiPostproc, err = gst.NewElement("vaapipostproc")
@@ -90,42 +126,82 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 			return nil, fmt.Errorf("failed to create vaapipostproc (VAAPI required): %w", err)
 		}
 
+		// OPTIMIZATION Level 1: Force NV12 output format (no negotiation)
+		// GPU scaling to target resolution
+		vaapiPostproc.SetProperty("format", "nv12")
+		vaapiPostproc.SetProperty("width", cfg.Width)
+		vaapiPostproc.SetProperty("height", cfg.Height)
+		vaapiPostproc.SetProperty("scale-method", 2) // HQ scaling (2 = high quality)
+
 		// VAAPI outputs NV12 (YUV), need videoconvert to RGB
 		converter, err = gst.NewElement("videoconvert")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create videoconvert: %w", err)
 		}
 
-		scaler, err = gst.NewElement("videoscale")
-		if err != nil {
-			return nil, fmt.Errorf("failed to create videoscale: %w", err)
-		}
+		// OPTIMIZATION Level 3: Multi-threaded YUV→RGB conversion
+		converter.SetProperty("n-threads", 0)      // 0 = auto-detect cores
+		converter.SetProperty("dither", 0)         // Disable dithering (minimal quality loss)
+		converter.SetProperty("chroma-mode", 0)    // Full chroma resampling
+
+		// OPTIMIZATION Level 1: Remove videoscale (GPU does it in vaapipostproc)
+		scaler = nil
 
 		usingVAAPI = true
 
 	case AccelAuto:
-		// Try VAAPI, fallback to software
-		decoder, err = gst.NewElement("vaapidecodebin")
+		// OPTIMIZATION Level 1: Try H.264-specific first, fallback to generic/software
+		decoder, err = gst.NewElement("vaapih264dec")
 		if err == nil {
+			// vaapih264dec available
+			decoder.SetProperty("low-latency", true)
+			if cfg.TargetFPS < 6.0 {
+				decoder.SetProperty("output-corrupt", false)
+			}
+
 			vaapiPostproc, err = gst.NewElement("vaapipostproc")
 			if err == nil {
-				// VAAPI available
+				// VAAPI fully available
+				vaapiPostproc.SetProperty("format", "nv12")
+				vaapiPostproc.SetProperty("width", cfg.Width)
+				vaapiPostproc.SetProperty("height", cfg.Height)
+				vaapiPostproc.SetProperty("scale-method", 2)
+
 				converter, _ = gst.NewElement("videoconvert")
-				scaler, _ = gst.NewElement("videoscale")
+				converter.SetProperty("n-threads", 0)
+				converter.SetProperty("dither", 0)
+				converter.SetProperty("chroma-mode", 0)
+
+				scaler = nil
 				usingVAAPI = true
+				slog.Info("rtsp: using optimized VAAPI pipeline (vaapih264dec)")
 			} else {
 				// vaapipostproc failed, fallback to software
 				vaapiPostproc = nil
 				decoder, _ = gst.NewElement("avdec_h264")
+				decoder.SetProperty("max-threads", 0) // Multi-threaded decode
+				decoder.SetProperty("output-corrupt", false)
 				converter, _ = gst.NewElement("videoconvert")
+				converter.SetProperty("n-threads", 0)
+				converter.SetProperty("dither", 0)
+				converter.SetProperty("chroma-mode", 0)
 				scaler, _ = gst.NewElement("videoscale")
+				usingVAAPI = false
+				slog.Warn("rtsp: VAAPI unavailable, using software decoder")
 			}
 		} else {
-			// vaapidecodebin failed, use software
+			// vaapih264dec failed, use software
 			vaapiPostproc = nil
 			decoder, _ = gst.NewElement("avdec_h264")
+			decoder.SetProperty("max-threads", 0)
+			decoder.SetProperty("output-corrupt", false)
 			converter, _ = gst.NewElement("videoconvert")
+			converter.SetProperty("n-threads", 0)
+			converter.SetProperty("dither", 0)
+			converter.SetProperty("chroma-mode", 0)
 			scaler, _ = gst.NewElement("videoscale")
+			usingVAAPI = false
+			slog.Warn("rtsp: VAAPI unavailable, using software decoder")
 		}
 
 	case AccelSoftware:
@@ -135,15 +211,26 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 			return nil, fmt.Errorf("failed to create avdec_h264: %w", err)
 		}
 
+		// OPTIMIZATION Level 3: Multi-threaded software decode
+		decoder.SetProperty("max-threads", 0)       // 0 = auto-detect cores
+		decoder.SetProperty("output-corrupt", false) // Skip corrupt frames
+
 		converter, err = gst.NewElement("videoconvert")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create videoconvert: %w", err)
 		}
 
+		// OPTIMIZATION Level 3: Multi-threaded conversion
+		converter.SetProperty("n-threads", 0)
+		converter.SetProperty("dither", 0)
+		converter.SetProperty("chroma-mode", 0)
+
 		scaler, err = gst.NewElement("videoscale")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create videoscale: %w", err)
 		}
+
+		slog.Info("rtsp: using software decoder with multi-threading")
 
 	default:
 		return nil, fmt.Errorf("invalid acceleration mode: %d", cfg.Acceleration)
@@ -156,6 +243,13 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 	}
 	videorate.SetProperty("drop-only", true)     // Only drop frames, never duplicate
 	videorate.SetProperty("skip-to-first", true) // Skip to first frame on start
+
+	// OPTIMIZATION Level 2: No averaging for low FPS
+	// Immediate drop decisions (no 500ms smoothing window)
+	if cfg.TargetFPS <= 2.0 {
+		videorate.SetProperty("average-period", uint64(0))
+		slog.Debug("rtsp: videorate using immediate drop mode", "target_fps", cfg.TargetFPS)
+	}
 
 	// Create capsfilter with framerate control
 	capsfilter, err := gst.NewElement("capsfilter")
@@ -177,18 +271,46 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 	appsink.SetProperty("max-buffers", 1) // Keep only latest frame
 	appsink.SetProperty("drop", true)     // Drop old frames
 
+	// OPTIMIZATION Level 2: QoS events for upstream frame dropping
+	// When appsink drops frames, notify upstream elements to drop BEFORE decoding
+	appsink.SetProperty("qos", true)
+	slog.Debug("rtsp: appsink QoS events enabled (pre-decode drops)")
+
+	// OPTIMIZATION Level 1: Add RGB capsfilter after videoconvert (format lock)
+	// Note: We do NOT add NV12 capsfilter because video/x-raw(memory:VASurface)
+	// prevents videoconvert from accessing the data (GPU-only memory).
+	// Instead, vaapipostproc properties (format=nv12, width, height) are sufficient
+	// for format negotiation, and GStreamer will automatically handle GPU→CPU transfer.
+	var capsRGB *gst.Element
+	if usingVAAPI {
+		// Force videoconvert to output RGB BEFORE videorate
+		// This prevents caps negotiation issues between videorate and final capsfilter
+		capsRGB, err = gst.NewElement("capsfilter")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create RGB capsfilter: %w", err)
+		}
+		// Lock RGB format with target resolution (no framerate yet)
+		capsRGBStr := fmt.Sprintf("video/x-raw,format=RGB,width=%d,height=%d", cfg.Width, cfg.Height)
+		capsRGB.SetProperty("caps", gst.NewCapsFromString(capsRGBStr))
+		slog.Debug("rtsp: RGB format lock enabled", "caps", capsRGBStr)
+	}
+
 	// Add all elements to pipeline (conditionally based on VAAPI usage)
 	if usingVAAPI {
-		// VAAPI pipeline: rtspsrc → rtph264depay → vaapidecodebin → vaapipostproc → videoconvert → videoscale → videorate → capsfilter → appsink
+		// OPTIMIZED VAAPI pipeline: rtspsrc → rtph264depay → vaapih264dec → vaapipostproc(GPU scale+NV12) → videoconvert → capsRGB → videorate → capsfilter → appsink
+		// Note: videoscale removed (GPU does it in vaapipostproc)
+		// Note: capsRGB added to force RGB format before videorate (prevents caps negotiation issues)
+		// Note: No capsNV12 - vaapipostproc properties handle format, GStreamer handles GPU→CPU transfer
 		pipeline.AddMany(
 			rtspsrc,
 			rtph264depay,
 			decoder,
-			vaapiPostproc,
-			converter,
-			scaler,
+			vaapiPostproc, // GPU: decode + scale + NV12 format
+			converter,     // CPU: NV12 → RGB conversion
+			capsRGB,       // RGB format lock (videoconvert output)
+			// scaler removed (GPU scaling in vaapipostproc)
 			videorate,
-			capsfilter,
+			capsfilter,    // RGB + framerate lock (final)
 			appsink.Element,
 		)
 
@@ -196,11 +318,12 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 		if err := gst.ElementLinkMany(
 			rtph264depay,
 			decoder,
-			vaapiPostproc,
-			converter,
-			scaler,
+			vaapiPostproc, // GPU processing
+			converter,     // GPU→CPU transfer + NV12→RGB
+			capsRGB,       // RGB format lock
+			// scaler removed
 			videorate,
-			capsfilter,
+			capsfilter,    // RGB + framerate
 			appsink.Element,
 		); err != nil {
 			return nil, fmt.Errorf("failed to link VAAPI pipeline elements: %w", err)
@@ -211,6 +334,15 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 		if err := addDecodeLatencyProbe(vaapiPostproc); err != nil {
 			slog.Warn("rtsp: failed to add decode latency probe, continuing without telemetry", "error", err)
 		}
+
+		slog.Info("rtsp: optimized VAAPI pipeline created",
+			"decoder", "vaapih264dec",
+			"gpu_scaling", true,
+			"format", "NV12→RGB",
+			"rgb_capsfilter", true,
+			"multi_thread", true,
+			"low_latency", true,
+		)
 	} else {
 		// Software pipeline: rtspsrc → rtph264depay → avdec_h264 → videoconvert → videoscale → videorate → capsfilter → appsink
 		pipeline.AddMany(

@@ -99,8 +99,12 @@ func (e ErrorCategory) String() string {
 type Resolution int
 
 const (
+	// Res480p represents 640x480 resolution (VGA)
+	Res480p Resolution = iota
 	// Res512p represents 910x512 resolution
-	Res512p Resolution = iota
+	Res512p
+	// Res640p represents 960x640 resolution
+	Res640p
 	// Res720p represents 1280x720 resolution (HD)
 	Res720p
 	// Res1080p represents 1920x1080 resolution (Full HD)
@@ -110,8 +114,12 @@ const (
 // Dimensions returns the width and height for the resolution
 func (r Resolution) Dimensions() (width, height int) {
 	switch r {
+	case Res480p:
+		return 640, 480
 	case Res512p:
 		return 910, 512
+	case Res640p:
+		return 960, 640
 	case Res720p:
 		return 1280, 720
 	case Res1080p:
@@ -125,8 +133,12 @@ func (r Resolution) Dimensions() (width, height int) {
 // String returns a human-readable string representation of the resolution
 func (r Resolution) String() string {
 	switch r {
+	case Res480p:
+		return "480p"
 	case Res512p:
 		return "512p"
+	case Res640p:
+		return "640p"
 	case Res720p:
 		return "720p"
 	case Res1080p:

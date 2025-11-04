@@ -21,6 +21,7 @@ type RTSPStream struct {
 	height       int
 	targetFPS    float64
 	sourceStream string
+	acceleration HardwareAccel
 
 	// GStreamer pipeline elements (for hot-reload)
 	elements *rtsp.PipelineElements
@@ -86,14 +87,34 @@ func NewRTSPStream(cfg RTSPConfig) (*RTSPStream, error) {
 		return nil, fmt.Errorf("stream-capture: GStreamer not available: %w", err)
 	}
 
+	// Fail-fast validation: VAAPI availability (if forced)
+	if cfg.Acceleration == AccelVAAPI {
+		if err := checkVAAPIAvailable(); err != nil {
+			return nil, fmt.Errorf("stream-capture: VAAPI not available: %w", err)
+		}
+	}
+
+	// Build reconnect config from user settings (or defaults)
+	reconnectCfg := rtsp.DefaultReconnectConfig()
+	if cfg.MaxReconnectAttempts > 0 {
+		reconnectCfg.MaxRetries = cfg.MaxReconnectAttempts
+	}
+	if cfg.ReconnectInitialDelay > 0 {
+		reconnectCfg.RetryDelay = cfg.ReconnectInitialDelay
+	}
+	if cfg.ReconnectMaxDelay > 0 {
+		reconnectCfg.MaxRetryDelay = cfg.ReconnectMaxDelay
+	}
+
 	s := &RTSPStream{
 		rtspURL:      cfg.URL,
 		width:        width,
 		height:       height,
 		targetFPS:    cfg.TargetFPS,
 		sourceStream: cfg.SourceStream,
+		acceleration: cfg.Acceleration,
 		frames:       make(chan Frame, 10), // Buffer 10 frames
-		reconnectCfg: rtsp.DefaultReconnectConfig(),
+		reconnectCfg: reconnectCfg,
 		reconnectState: &rtsp.ReconnectState{
 			Reconnects: new(uint32),
 		},
@@ -104,6 +125,7 @@ func NewRTSPStream(cfg RTSPConfig) (*RTSPStream, error) {
 		"resolution", fmt.Sprintf("%dx%d", width, height),
 		"target_fps", cfg.TargetFPS,
 		"source_stream", cfg.SourceStream,
+		"acceleration", cfg.Acceleration.String(),
 	)
 
 	return s, nil
@@ -142,10 +164,11 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 
 	// Create GStreamer pipeline
 	pipelineCfg := rtsp.PipelineConfig{
-		RTSPURL:   s.rtspURL,
-		Width:     s.width,
-		Height:    s.height,
-		TargetFPS: s.targetFPS,
+		RTSPURL:      s.rtspURL,
+		Width:        s.width,
+		Height:       s.height,
+		TargetFPS:    s.targetFPS,
+		Acceleration: int(s.acceleration), // Pass acceleration mode
 	}
 
 	elements, err := rtsp.CreatePipeline(pipelineCfg)
@@ -160,12 +183,13 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 
 	// Set up callbacks
 	callbackCtx := &rtsp.CallbackContext{
-		FrameChan:    internalFrames,
-		FrameCounter: &s.frameCount,
-		BytesRead:    &s.bytesRead,
-		Width:        s.width,
-		Height:       s.height,
-		SourceStream: s.sourceStream,
+		FrameChan:     internalFrames,
+		FrameCounter:  &s.frameCount,
+		BytesRead:     &s.bytesRead,
+		FramesDropped: &s.framesDropped,
+		Width:         s.width,
+		Height:        s.height,
+		SourceStream:  s.sourceStream,
 	}
 
 	// Launch goroutine to convert internal frames to public frames
@@ -518,17 +542,52 @@ func (s *RTSPStream) SetTargetFPS(fps float64) error {
 		"new_fps", fps,
 	)
 
-	// Update capsfilter (hot-reload)
-	if err := rtsp.UpdateFramerateCaps(s.elements.CapsFilter, fps, s.width, s.height); err != nil {
-		// Rollback on error
-		slog.Error("stream-capture: failed to update FPS, rolling back",
-			"error", err,
-			"rtsp_url", s.rtspURL,
+	// Update capsfilter (hot-reload) with timeout protection
+	// Hot-reload should complete in ~2 seconds, timeout at 5s for safety
+	updateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- rtsp.UpdateFramerateCaps(s.elements.CapsFilter, fps, s.width, s.height)
+	}()
+
+	select {
+	case err := <-errChan:
+		if err != nil {
+			// Explicit rollback to previous FPS
+			slog.Warn("stream-capture: FPS update failed, attempting rollback",
+				"error", err,
+				"old_fps", oldFPS,
+				"failed_fps", fps,
+			)
+
+			rollbackErr := rtsp.UpdateFramerateCaps(s.elements.CapsFilter, oldFPS, s.width, s.height)
+			if rollbackErr != nil {
+				slog.Error("stream-capture: rollback failed, pipeline may be in inconsistent state",
+					"rollback_error", rollbackErr,
+					"original_error", err,
+				)
+			}
+
+			return fmt.Errorf("stream-capture: failed to update FPS: %w", err)
+		}
+
+	case <-updateCtx.Done():
+		// Timeout exceeded - attempt rollback
+		slog.Error("stream-capture: FPS update timeout (>5s), attempting rollback",
 			"old_fps", oldFPS,
-			"new_fps", fps,
-			"uptime", time.Since(s.started),
+			"failed_fps", fps,
 		)
-		return fmt.Errorf("stream-capture: failed to update FPS: %w", err)
+
+		rollbackErr := rtsp.UpdateFramerateCaps(s.elements.CapsFilter, oldFPS, s.width, s.height)
+		if rollbackErr != nil {
+			slog.Error("stream-capture: rollback failed after timeout",
+				"rollback_error", rollbackErr,
+			)
+		}
+
+		return fmt.Errorf("stream-capture: SetTargetFPS timeout after 5 seconds")
 	}
 
 	// Update internal state
@@ -634,10 +693,13 @@ analyze:
 		"stable", stats.IsStable,
 	)
 
+	// Fail-fast: Warmup MUST verify stream stability before production use
+	// Unstable FPS indicates network issues, camera problems, or pipeline misconfiguration
 	if !stats.IsStable {
-		slog.Warn("stream-capture: stream FPS is unstable, may affect processing timing",
-			"fps_stddev", stats.FPSStdDev,
-			"fps_mean", stats.FPSMean,
+		return nil, fmt.Errorf(
+			"stream-capture: warmup failed - stream FPS unstable (mean=%.2f Hz, stddev=%.2f, threshold=15%%)",
+			stats.FPSMean,
+			stats.FPSStdDev,
 		)
 	}
 
@@ -659,6 +721,36 @@ func checkGStreamerAvailable() error {
 
 	// Clean up test element
 	elem.SetState(gst.StateNull)
+
+	return nil
+}
+
+// checkVAAPIAvailable checks if VAAPI hardware acceleration is available
+//
+// This is a fail-fast validation that runs at construction time when
+// Acceleration is set to AccelVAAPI.
+//
+// Returns an error if VAAPI elements are not available (missing gstreamer1.0-vaapi
+// package or incompatible hardware).
+func checkVAAPIAvailable() error {
+	// Initialize GStreamer (safe to call multiple times)
+	gst.Init(nil)
+
+	// Try to create vaapidecodebin element
+	decoder, err := gst.NewElement("vaapidecodebin")
+	if err != nil {
+		return fmt.Errorf("vaapidecodebin not available (install gstreamer1.0-vaapi): %w", err)
+	}
+	decoder.SetState(gst.StateNull)
+
+	// Try to create vaapipostproc element
+	postproc, err := gst.NewElement("vaapipostproc")
+	if err != nil {
+		return fmt.Errorf("vaapipostproc not available (install gstreamer1.0-vaapi): %w", err)
+	}
+	postproc.SetState(gst.StateNull)
+
+	slog.Debug("stream-capture: VAAPI hardware acceleration available")
 
 	return nil
 }

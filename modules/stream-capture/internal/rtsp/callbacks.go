@@ -24,12 +24,13 @@ type Frame struct {
 
 // CallbackContext holds state needed by GStreamer callbacks
 type CallbackContext struct {
-	FrameChan    chan<- Frame // Uses internal Frame type
-	FrameCounter *uint64      // Atomic counter for sequence numbers
-	BytesRead    *uint64      // Atomic counter for bytes read
-	Width        int
-	Height       int
-	SourceStream string
+	FrameChan     chan<- Frame // Uses internal Frame type
+	FrameCounter  *uint64      // Atomic counter for sequence numbers
+	BytesRead     *uint64      // Atomic counter for bytes read
+	FramesDropped *uint64      // Atomic counter for dropped frames (channel full)
+	Width         int
+	Height        int
+	SourceStream  string
 }
 
 // OnNewSample is called by GStreamer when a new frame is available
@@ -46,15 +47,18 @@ func OnNewSample(sink *app.Sink, ctx *CallbackContext) gst.FlowReturn {
 	// Pull sample from appsink
 	sample := sink.PullSample()
 	if sample == nil {
-		slog.Error("rtsp: failed to pull sample from appsink")
-		return gst.FlowEOS
+		// Graceful degradation: skip frame instead of terminating stream
+		// A single corrupted frame should not kill the entire pipeline
+		slog.Warn("rtsp: failed to pull sample from appsink, skipping frame")
+		return gst.FlowOK
 	}
 
 	// Get buffer from sample
 	buffer := sample.GetBuffer()
 	if buffer == nil {
-		slog.Error("rtsp: failed to get buffer from sample")
-		return gst.FlowError
+		// Graceful degradation: skip frame instead of terminating stream
+		slog.Warn("rtsp: failed to get buffer from sample, skipping frame")
+		return gst.FlowOK
 	}
 
 	// Map buffer to read data
@@ -95,6 +99,8 @@ func OnNewSample(sink *app.Sink, ctx *CallbackContext) gst.FlowReturn {
 			"trace_id", frame.TraceID,
 		)
 	default:
+		// Track dropped frame at callback layer
+		atomic.AddUint64(ctx.FramesDropped, 1)
 		slog.Debug("rtsp: dropping frame, channel full",
 			"seq", frame.Seq,
 			"trace_id", frame.TraceID,

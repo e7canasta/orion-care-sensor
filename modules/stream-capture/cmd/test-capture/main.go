@@ -32,6 +32,8 @@ func main() {
 	jpegQuality := flag.Int("jpeg-quality", 90, "JPEG quality (1-100, only for jpeg format)")
 	maxFrames := flag.Int("max-frames", 0, "Maximum frames to capture (0 = unlimited)")
 	statsInterval := flag.Int("stats-interval", 10, "Seconds between stats reports")
+	accel := flag.String("accel", "auto", "Acceleration mode: auto, vaapi, software")
+	skipWarmup := flag.Bool("skip-warmup", false, "Skip FPS stability warmup")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	flag.Parse()
@@ -116,12 +118,26 @@ func main() {
 	}
 	fmt.Printf("\n")
 
+	// Parse acceleration mode
+	var accelMode streamcapture.HardwareAccel
+	switch *accel {
+	case "auto":
+		accelMode = streamcapture.AccelAuto
+	case "vaapi":
+		accelMode = streamcapture.AccelVAAPI
+	case "software":
+		accelMode = streamcapture.AccelSoftware
+	default:
+		log.Fatalf("Invalid acceleration mode: %s (must be auto, vaapi, or software)", *accel)
+	}
+
 	// Create RTSP stream
 	cfg := streamcapture.RTSPConfig{
 		URL:          *rtspURL,
 		Resolution:   res,
 		TargetFPS:    *fps,
 		SourceStream: *sourceStream,
+		Acceleration: accelMode,
 	}
 
 	stream, err := streamcapture.NewRTSPStream(cfg)
@@ -147,30 +163,32 @@ func main() {
 	slog.Info("Stream started successfully")
 
 	// Warmup: measure FPS stability before processing frames
-	fmt.Printf("\n")
-	fmt.Printf("Running warmup (5 seconds) to measure stream stability...\n")
-	warmupStats, err := stream.Warmup(ctx, 5*time.Second)
-	if err != nil {
-		log.Fatalf("Warmup failed: %v", err)
+	if !*skipWarmup {
+		fmt.Printf("\n")
+		fmt.Printf("Running warmup (5 seconds) to measure stream stability...\n")
+		warmupStats, err := stream.Warmup(ctx, 5*time.Second)
+		if err != nil {
+			log.Fatalf("Warmup failed: %v", err)
+		}
+
+		fmt.Printf("\n")
+		fmt.Printf("╭─────────────────────────────────────────────────────────╮\n")
+		fmt.Printf("│ Warmup Complete\n")
+		fmt.Printf("├─────────────────────────────────────────────────────────┤\n")
+		fmt.Printf("│ Frames Received:    %6d frames\n", warmupStats.FramesReceived)
+		fmt.Printf("│ Duration:           %6.1f seconds\n", warmupStats.Duration.Seconds())
+		fmt.Printf("│ FPS Mean:           %6.2f fps\n", warmupStats.FPSMean)
+		fmt.Printf("│ FPS StdDev:         %6.2f fps\n", warmupStats.FPSStdDev)
+		fmt.Printf("│ FPS Range:          %6.1f - %.1f fps\n", warmupStats.FPSMin, warmupStats.FPSMax)
+		fmt.Printf("│ Stable:             %6v\n", warmupStats.IsStable)
+		fmt.Printf("╰─────────────────────────────────────────────────────────╯\n")
+
+		if !warmupStats.IsStable {
+			fmt.Printf("\n⚠️  WARNING: Stream FPS is unstable (high variance)\n")
+		}
+
+		fmt.Printf("\n")
 	}
-
-	fmt.Printf("\n")
-	fmt.Printf("╭─────────────────────────────────────────────────────────╮\n")
-	fmt.Printf("│ Warmup Complete\n")
-	fmt.Printf("├─────────────────────────────────────────────────────────┤\n")
-	fmt.Printf("│ Frames Received:    %6d frames\n", warmupStats.FramesReceived)
-	fmt.Printf("│ Duration:           %6.1f seconds\n", warmupStats.Duration.Seconds())
-	fmt.Printf("│ FPS Mean:           %6.2f fps\n", warmupStats.FPSMean)
-	fmt.Printf("│ FPS StdDev:         %6.2f fps\n", warmupStats.FPSStdDev)
-	fmt.Printf("│ FPS Range:          %6.1f - %.1f fps\n", warmupStats.FPSMin, warmupStats.FPSMax)
-	fmt.Printf("│ Stable:             %6v\n", warmupStats.IsStable)
-	fmt.Printf("╰─────────────────────────────────────────────────────────╯\n")
-
-	if !warmupStats.IsStable {
-		fmt.Printf("\n⚠️  WARNING: Stream FPS is unstable (high variance)\n")
-	}
-
-	fmt.Printf("\n")
 	fmt.Printf("Starting frame capture...\n")
 	fmt.Printf("Press Ctrl+C to stop gracefully\n")
 	fmt.Printf("═══════════════════════════════════════════════════════════\n\n")

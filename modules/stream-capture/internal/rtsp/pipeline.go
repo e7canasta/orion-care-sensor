@@ -9,10 +9,11 @@ import (
 
 // PipelineConfig contains configuration for GStreamer pipeline creation
 type PipelineConfig struct {
-	RTSPURL   string
-	Width     int
-	Height    int
-	TargetFPS float64
+	RTSPURL      string
+	Width        int
+	Height       int
+	TargetFPS    float64
+	Acceleration int // 0=Auto, 1=VAAPI, 2=Software (from streamcapture.HardwareAccel)
 }
 
 // PipelineElements holds references to GStreamer pipeline elements
@@ -63,20 +64,86 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 		return nil, fmt.Errorf("failed to create rtph264depay: %w", err)
 	}
 
-	avdec_h264, err := gst.NewElement("avdec_h264")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create avdec_h264: %w", err)
-	}
+	// Choose pipeline elements based on acceleration mode
+	const (
+		AccelAuto     = 0
+		AccelVAAPI    = 1
+		AccelSoftware = 2
+	)
 
-	// Create conversion and scaling elements
-	videoconvert, err := gst.NewElement("videoconvert")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create videoconvert: %w", err)
-	}
+	var decoder, vaapiPostproc, converter, scaler *gst.Element
+	usingVAAPI := false
 
-	videoscale, err := gst.NewElement("videoscale")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create videoscale: %w", err)
+	switch cfg.Acceleration {
+	case AccelVAAPI:
+		// Force VAAPI - fail if not available
+		decoder, err = gst.NewElement("vaapidecodebin")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create vaapidecodebin (VAAPI required): %w", err)
+		}
+
+		vaapiPostproc, err = gst.NewElement("vaapipostproc")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create vaapipostproc (VAAPI required): %w", err)
+		}
+
+		// VAAPI outputs NV12 (YUV), need videoconvert to RGB
+		converter, err = gst.NewElement("videoconvert")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create videoconvert: %w", err)
+		}
+
+		scaler, err = gst.NewElement("videoscale")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create videoscale: %w", err)
+		}
+
+		usingVAAPI = true
+
+	case AccelAuto:
+		// Try VAAPI, fallback to software
+		decoder, err = gst.NewElement("vaapidecodebin")
+		if err == nil {
+			vaapiPostproc, err = gst.NewElement("vaapipostproc")
+			if err == nil {
+				// VAAPI available
+				converter, _ = gst.NewElement("videoconvert")
+				scaler, _ = gst.NewElement("videoscale")
+				usingVAAPI = true
+			} else {
+				// vaapipostproc failed, fallback to software
+				vaapiPostproc = nil
+				decoder, _ = gst.NewElement("avdec_h264")
+				converter, _ = gst.NewElement("videoconvert")
+				scaler, _ = gst.NewElement("videoscale")
+			}
+		} else {
+			// vaapidecodebin failed, use software
+			vaapiPostproc = nil
+			decoder, _ = gst.NewElement("avdec_h264")
+			converter, _ = gst.NewElement("videoconvert")
+			scaler, _ = gst.NewElement("videoscale")
+		}
+
+	case AccelSoftware:
+		// Force software decode
+		decoder, err = gst.NewElement("avdec_h264")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create avdec_h264: %w", err)
+		}
+
+		converter, err = gst.NewElement("videoconvert")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create videoconvert: %w", err)
+		}
+
+		scaler, err = gst.NewElement("videoscale")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create videoscale: %w", err)
+		}
+
+	default:
+		return nil, fmt.Errorf("invalid acceleration mode: %d", cfg.Acceleration)
 	}
 
 	// Create videorate for FPS control (hot-reload support)
@@ -107,30 +174,59 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 	appsink.SetProperty("max-buffers", 1) // Keep only latest frame
 	appsink.SetProperty("drop", true)     // Drop old frames
 
-	// Add all elements to pipeline
-	pipeline.AddMany(
-		rtspsrc,
-		rtph264depay,
-		avdec_h264,
-		videoconvert,
-		videoscale,
-		videorate,
-		capsfilter,
-		appsink.Element,
-	)
+	// Add all elements to pipeline (conditionally based on VAAPI usage)
+	if usingVAAPI {
+		// VAAPI pipeline: rtspsrc → rtph264depay → vaapidecodebin → vaapipostproc → videoconvert → videoscale → videorate → capsfilter → appsink
+		pipeline.AddMany(
+			rtspsrc,
+			rtph264depay,
+			decoder,
+			vaapiPostproc,
+			converter,
+			scaler,
+			videorate,
+			capsfilter,
+			appsink.Element,
+		)
 
-	// Link static elements
-	// (rtspsrc has dynamic pads, will be linked in pad-added callback)
-	if err := gst.ElementLinkMany(
-		rtph264depay,
-		avdec_h264,
-		videoconvert,
-		videoscale,
-		videorate,
-		capsfilter,
-		appsink.Element,
-	); err != nil {
-		return nil, fmt.Errorf("failed to link pipeline elements: %w", err)
+		// Link static elements (rtspsrc has dynamic pads, linked in pad-added callback)
+		if err := gst.ElementLinkMany(
+			rtph264depay,
+			decoder,
+			vaapiPostproc,
+			converter,
+			scaler,
+			videorate,
+			capsfilter,
+			appsink.Element,
+		); err != nil {
+			return nil, fmt.Errorf("failed to link VAAPI pipeline elements: %w", err)
+		}
+	} else {
+		// Software pipeline: rtspsrc → rtph264depay → avdec_h264 → videoconvert → videoscale → videorate → capsfilter → appsink
+		pipeline.AddMany(
+			rtspsrc,
+			rtph264depay,
+			decoder,
+			converter,
+			scaler,
+			videorate,
+			capsfilter,
+			appsink.Element,
+		)
+
+		// Link static elements (rtspsrc has dynamic pads, linked in pad-added callback)
+		if err := gst.ElementLinkMany(
+			rtph264depay,
+			decoder,
+			converter,
+			scaler,
+			videorate,
+			capsfilter,
+			appsink.Element,
+		); err != nil {
+			return nil, fmt.Errorf("failed to link software pipeline elements: %w", err)
+		}
 	}
 
 	return &PipelineElements{

@@ -87,6 +87,36 @@ func (r Resolution) String() string {
 	}
 }
 
+// HardwareAccel represents hardware acceleration mode for video decoding
+type HardwareAccel int
+
+const (
+	// AccelAuto attempts VAAPI hardware acceleration, falls back to software decode if unavailable.
+	// This is the recommended default for production deployments on Intel hardware.
+	AccelAuto HardwareAccel = iota
+	// AccelVAAPI forces VAAPI hardware acceleration (Intel Quick Sync).
+	// Fails fast at construction time if VAAPI is not available.
+	// Use this for deployments where hardware acceleration is mandatory.
+	AccelVAAPI
+	// AccelSoftware forces software decoding (CPU-based).
+	// Use this for maximum compatibility or debugging hardware issues.
+	AccelSoftware
+)
+
+// String returns a human-readable string representation of the acceleration mode
+func (a HardwareAccel) String() string {
+	switch a {
+	case AccelAuto:
+		return "auto"
+	case AccelVAAPI:
+		return "vaapi"
+	case AccelSoftware:
+		return "software"
+	default:
+		return "auto"
+	}
+}
+
 // RTSPConfig contains configuration for RTSP stream capture
 type RTSPConfig struct {
 	// URL is the RTSP stream URL (required)
@@ -97,6 +127,20 @@ type RTSPConfig struct {
 	TargetFPS float64
 	// SourceStream identifies the stream (e.g., "LQ", "HQ")
 	SourceStream string
+	// MaxReconnectAttempts is the maximum number of reconnection attempts (default: 5)
+	// Set to 0 to use default value
+	MaxReconnectAttempts int
+	// ReconnectInitialDelay is the initial delay before first reconnection attempt (default: 1s)
+	// Set to 0 to use default value
+	ReconnectInitialDelay time.Duration
+	// ReconnectMaxDelay is the maximum delay between reconnection attempts (default: 30s)
+	// Set to 0 to use default value
+	ReconnectMaxDelay time.Duration
+	// Acceleration specifies hardware acceleration mode (default: AccelAuto)
+	// AccelAuto: Try VAAPI, fallback to software (recommended)
+	// AccelVAAPI: Force VAAPI, fail-fast if unavailable
+	// AccelSoftware: Force software decode
+	Acceleration HardwareAccel
 }
 
 // WarmupStats contains statistics collected during stream warm-up phase

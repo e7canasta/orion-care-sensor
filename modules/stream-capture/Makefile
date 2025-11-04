@@ -84,11 +84,13 @@ run-test: test-capture
 		--url "$(RTSP_URL)" \
 		--resolution "$(or $(RES),720p)" \
 		--fps "$(or $(FPS),2.0)" \
+		--accel "$(or $(ACCEL),auto)" \
 		--output "$(OUTPUT_DIR)" \
 		--format "$(or $(FORMAT),png)" \
 		--jpeg-quality "$(or $(JPEG_QUALITY),90)" \
 		--stats-interval "$(or $(STATS_INTERVAL),10)" \
 		$(if $(DEBUG),--debug) \
+		$(if $(SKIP_WARMUP),--skip-warmup) \
 		$(if $(MAX_FRAMES),--max-frames $(MAX_FRAMES))
 
 run-simple: examples/simple

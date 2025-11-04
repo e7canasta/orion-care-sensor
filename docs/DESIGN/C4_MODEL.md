@@ -178,13 +178,13 @@ C4Component
 
 ### **Descripción de Componentes (Worker Manager)**
 
-| Component | Responsabilidad | Bounded Context |
-|---|---|---|
-| **Lifecycle Manager** | Spawn workers via exec.Command, monitor processes, one-shot restart | Worker Process Management |
-| **Catalog Reader** | Load YAML manifests, validate schemas, cache manifests | Worker Configuration |
-| **IPC Manager** | MsgPack serialization, 4-byte length prefix, stdin/stdout handling | Inter-Process Communication |
-| **Health Monitor** | Adaptive watchdog (max(30s, 3×inference_period)), heartbeat checks | Worker Health |
-| **Resource Profiler** | Track CPU/mem/GPU usage, CanSpawn decision, resource limits | Resource Management |
+| Component             | Responsabilidad                                                     | Bounded Context             |
+| --------------------- | ------------------------------------------------------------------- | --------------------------- |
+| **Lifecycle Manager** | Spawn workers via exec.Command, monitor processes, one-shot restart | Worker Process Management   |
+| **Catalog Reader**    | Load YAML manifests, validate schemas, cache manifests              | Worker Configuration        |
+| **IPC Manager**       | MsgPack serialization, 4-byte length prefix, stdin/stdout handling  | Inter-Process Communication |
+| **Health Monitor**    | Adaptive watchdog (max(30s, 3×inference_period)), heartbeat checks  | Worker Health               |
+| **Resource Profiler** | Track CPU/mem/GPU usage, CanSpawn decision, resource limits         | Resource Management         |
 
 ---
 
@@ -265,8 +265,8 @@ classDiagram
     class IPCManager {
         +SendFrame(worker *WorkerInstance, frame Frame, spec WorkerSpec) error
         +ReadInference(worker *WorkerInstance) (Inference, error)
-        -serializeMsgPack(data interface{}) ([]byte, error)
-        -deserializeMsgPack(data []byte) (interface{}, error)
+        -serializeMsgPack(data interface) ([]byte, error)
+        -deserializeMsgPack(data []byte) (interface, error)
     }
 
     LifecycleManager --> CatalogReader : uses

@@ -166,6 +166,8 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer close(internalFrames) // Ensure internal channel is closed on exit
+
 		for internalFrame := range internalFrames {
 			// Convert rtsp.Frame to streamcapture.Frame
 			publicFrame := Frame{
@@ -177,6 +179,11 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 				SourceStream: internalFrame.SourceStream,
 				TraceID:      internalFrame.TraceID,
 			}
+
+			// Update lastFrameAt timestamp (for latency metric)
+			s.mu.Lock()
+			s.lastFrameAt = time.Now()
+			s.mu.Unlock()
 
 			// Send to public channel (non-blocking)
 			select {
@@ -283,24 +290,53 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 	return s.frames, nil
 }
 
-// runPipeline monitors the GStreamer pipeline bus for messages
+// runPipeline monitors the GStreamer pipeline bus for messages with reconnection
 //
-// This goroutine runs in the background and handles:
-//   - EOS (end of stream) - stops pipeline
-//   - Error messages - triggers reconnection
-//   - State changes - logs transitions
+// This goroutine runs in the background and:
+//   1. Monitors pipeline bus for errors
+//   2. On error: triggers reconnection with exponential backoff
+//   3. On success: resets retry counter and continues
 //
-// Runs until context is cancelled or pipeline fails.
+// Runs until context is cancelled or max retries exceeded.
 func (s *RTSPStream) runPipeline() {
 	defer s.wg.Done()
+
+	// Use RunWithReconnect for automatic reconnection with exponential backoff
+	connectFn := func(ctx context.Context) error {
+		return s.monitorPipeline(ctx)
+	}
+
+	err := rtsp.RunWithReconnect(
+		s.ctx,
+		connectFn,
+		s.reconnectCfg,
+		s.reconnectState,
+	)
+
+	if err != nil {
+		slog.Error("stream-capture: pipeline stopped after reconnection failure",
+			"error", err,
+			"reconnects", atomic.LoadUint32(s.reconnectState.Reconnects),
+		)
+	}
+}
+
+// monitorPipeline monitors the GStreamer pipeline bus for messages
+//
+// Returns an error if the pipeline encounters an error (triggers reconnection).
+// Returns nil if context is cancelled (graceful shutdown).
+func (s *RTSPStream) monitorPipeline(ctx context.Context) error {
+	if s.elements == nil || s.elements.Pipeline == nil {
+		return fmt.Errorf("pipeline not initialized")
+	}
 
 	bus := s.elements.Pipeline.GetPipelineBus()
 
 	for {
 		select {
-		case <-s.ctx.Done():
-			slog.Debug("stream-capture: context cancelled, stopping pipeline")
-			return
+		case <-ctx.Done():
+			slog.Debug("stream-capture: context cancelled, stopping pipeline monitor")
+			return nil
 
 		default:
 			// Poll for messages with short timeout for responsive shutdown
@@ -311,8 +347,8 @@ func (s *RTSPStream) runPipeline() {
 
 			switch msg.Type() {
 			case gst.MessageEOS:
-				slog.Info("stream-capture: end of stream")
-				return
+				slog.Info("stream-capture: end of stream received")
+				return fmt.Errorf("end of stream")
 
 			case gst.MessageError:
 				gerr := msg.ParseError()
@@ -320,9 +356,8 @@ func (s *RTSPStream) runPipeline() {
 					"error", gerr.Error(),
 					"debug", gerr.DebugString(),
 				)
-				// TODO: Implement reconnection logic here
-				// For now, just log and continue
-				return
+				// Return error to trigger reconnection
+				return fmt.Errorf("pipeline error: %s", gerr.Error())
 
 			case gst.MessageStateChanged:
 				if msg.Source() == s.elements.Pipeline.GetName() {
@@ -331,6 +366,12 @@ func (s *RTSPStream) runPipeline() {
 						"from", old,
 						"to", new,
 					)
+
+					// Reset reconnection state when reaching PLAYING state
+					if new == gst.StatePlaying {
+						rtsp.ResetReconnectState(s.reconnectState)
+						slog.Info("stream-capture: pipeline playing, reconnect state reset")
+					}
 				}
 			}
 		}

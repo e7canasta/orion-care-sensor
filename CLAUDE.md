@@ -331,6 +331,9 @@ VAULT/
 
 ## Development Workflow
 
+
+
+
 ### When Adding New Features
 
 1. **Understand the Big Picture**: Review VAULT documentation before coding
@@ -379,3 +382,63 @@ VAULT/
 - Probe functionality disabled (GStreamer mainloop issues)
 - ROI Processor planned to be removed from Go (workers will handle ROIs)
 - No Makefile in prototype (binary pre-built in `bin/oriond`)
+
+
+---
+
+## Orion 2.0 Architecture
+
+### Documentation Structure
+
+**Strategic Documents**:
+- [Plan Evolutivo](docs/DESIGN/ORION_2.0_PLAN_EVOLUTIVO.md) - 3-phase roadmap (v1.5 → v2.0 → v3.0)
+- [C4 Model](docs/DESIGN/C4_MODEL.md) - Complete architectural blueprint (4 levels)
+- [Architecture Decision Records](docs/DESIGN/ADR/README.md) - Technical memory of key decisions
+
+**Backlog & Planning**:
+- [BACKLOG/README.md](BACKLOG/README.md) - Overview general
+- [BACKLOG/FASE_1_FOUNDATION.md](BACKLOG/FASE_1_FOUNDATION.md) - Sprints 1.1, 1.2, 2, 3
+- [BACKLOG/FASE_2_SCALE.md](BACKLOG/FASE_2_SCALE.md) - Multi-stream architecture
+- [BACKLOG/FASE_3_INTELLIGENCE.md](BACKLOG/FASE_3_INTELLIGENCE.md) - Cell orchestration
+
+### Multi-Module Monorepo (Orion 2.0)
+
+**Decision**: [ADR-001: Multi-Module Monorepo Layout](docs/DESIGN/ADR/001-multi-module-monorepo-layout.md)
+
+Orion 2.0 migrates to a multi-module monorepo using Go workspaces:
+
+```
+OrionWork/
+├── go.work                      # Workspace declaration
+├── modules/
+│   ├── stream-capture/          # BC: Stream Acquisition (Sprint 1.1)
+│   ├── worker-lifecycle/        # BC: Worker Lifecycle (Sprint 1.2)
+│   ├── framebus/                # BC: Frame Distribution
+│   ├── control-plane/           # BC: Control Plane (Sprint 2)
+│   ├── event-emitter/           # BC: Event Emission
+│   └── core/                    # BC: Application Core
+└── cmd/oriond/                  # Main binary
+```
+
+**Key Benefits**:
+- ✅ Independent evolution per bounded context
+- ✅ Localized documentation (CLAUDE.md, BACKLOG.md per module)
+- ✅ Configurable recipes (edge-device vs datacenter)
+- ✅ Semantic versioning per module
+- ✅ Boundary enforcement via Go toolchain
+
+**Module Documentation Structure**:
+Each module includes:
+- `CLAUDE.md` - AI companion guide (bounded context, API, anti-responsibilities)
+- `README.md` - Human-readable overview
+- `BACKLOG.md` - Sprint-specific tasks
+- `docs/DESIGN.md` - Architectural decisions
+- `docs/proposals/` - RFCs before implementation
+
+### GitHub Integration
+
+- **Repo**: https://github.com/e7canasta/orion-care-sensor
+- **Project**: https://github.com/users/e7canasta/projects/7
+- **Milestones**: v1.5 (2025-01-31), v2.0 (2025-03-31), v3.0 (2025-06-30)
+
+Backlog markdown files are source of truth, synced with GitHub issues.

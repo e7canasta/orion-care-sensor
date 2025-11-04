@@ -1,0 +1,238 @@
+# CLAUDE.md - {{MODULE_NAME}}
+
+This file provides guidance to Claude Code when working with this module.
+
+## Module Overview
+
+**Bounded Context**: {{BOUNDED_CONTEXT}}
+**Module Path**: `github.com/e7canasta/orion-care-sensor/modules/{{MODULE_DIR}}`
+**Version**: v0.1.0
+**Sprint**: {{SPRINT_NUMBER}}
+
+---
+
+## 📋 Responsibility
+
+**What this module DOES**:
+- ✅ {{RESPONSIBILITY_1}}
+- ✅ {{RESPONSIBILITY_2}}
+- ✅ {{RESPONSIBILITY_3}}
+
+---
+
+## 🚫 Anti-Responsibility
+
+**What this module DOES NOT do**:
+- ❌ {{ANTI_RESPONSIBILITY_1}}
+- ❌ {{ANTI_RESPONSIBILITY_2}}
+- ❌ {{ANTI_RESPONSIBILITY_3}}
+
+---
+
+## 🔌 Public API
+
+### Interfaces
+
+```go
+// {{MODULE_DIR}}/{{MAIN_INTERFACE_FILE}}.go
+package {{PACKAGE_NAME}}
+
+type {{MAIN_INTERFACE}} interface {
+    {{INTERFACE_METHODS}}
+}
+```
+
+### Types
+
+```go
+// {{MODULE_DIR}}/types.go
+package {{PACKAGE_NAME}}
+
+type {{MAIN_TYPE}} struct {
+    {{TYPE_FIELDS}}
+}
+```
+
+---
+
+## 🏗️ Internal Structure
+
+```
+modules/{{MODULE_DIR}}/
+├── go.mod
+├── CLAUDE.md                  # This file
+├── README.md                  # User-facing overview
+├── BACKLOG.md                 # Sprint-specific tasks
+├── docs/
+│   ├── DESIGN.md              # Architectural decisions
+│   └── proposals/             # RFCs before implementation
+├── internal/
+│   ├── {{INTERNAL_PACKAGE_1}}/
+│   └── {{INTERNAL_PACKAGE_2}}/
+├── {{PUBLIC_API_FILE}}.go     # Public interface
+├── {{IMPLEMENTATION_FILE}}.go # Implementation
+├── types.go                   # Exported types
+└── {{MODULE_DIR}}_test.go     # Tests
+```
+
+---
+
+## 📦 Dependencies
+
+### Internal Packages
+
+- `internal/{{INTERNAL_PACKAGE_1}}` - {{INTERNAL_DESCRIPTION_1}}
+- `internal/{{INTERNAL_PACKAGE_2}}` - {{INTERNAL_DESCRIPTION_2}}
+
+### External Modules
+
+{{#if HAS_EXTERNAL_DEPS}}
+- `{{EXTERNAL_MODULE_1}}` - {{EXTERNAL_MODULE_1_PURPOSE}}
+- `{{EXTERNAL_MODULE_2}}` - {{EXTERNAL_MODULE_2_PURPOSE}}
+{{else}}
+None (leaf module)
+{{/if}}
+
+### Workspace Modules
+
+{{#if HAS_WORKSPACE_DEPS}}
+- `github.com/e7canasta/orion-care-sensor/modules/{{WORKSPACE_DEP_1}}` - {{WORKSPACE_DEP_1_PURPOSE}}
+{{else}}
+None (independent module)
+{{/if}}
+
+---
+
+## ⚙️ Configuration
+
+### Config Structure
+
+```yaml
+# Reads from workspace-level config/orion.yaml
+{{CONFIG_SECTION}}:
+  {{CONFIG_KEY_1}}: {{CONFIG_VALUE_1}}
+  {{CONFIG_KEY_2}}: {{CONFIG_VALUE_2}}
+```
+
+### Environment Variables
+
+{{#if HAS_ENV_VARS}}
+- `{{ENV_VAR_1}}` - {{ENV_VAR_1_DESCRIPTION}}
+- `{{ENV_VAR_2}}` - {{ENV_VAR_2_DESCRIPTION}}
+{{else}}
+None (uses workspace config only)
+{{/if}}
+
+---
+
+## 🧪 Testing
+
+### Unit Tests
+
+```bash
+# Run module-specific tests
+cd modules/{{MODULE_DIR}}
+go test ./...
+
+# Run with coverage
+go test -cover ./...
+
+# Run with race detector
+go test -race ./...
+```
+
+### Integration Tests
+
+{{#if HAS_INTEGRATION_TESTS}}
+```bash
+# Integration tests (requires external dependencies)
+go test -tags=integration ./...
+```
+{{else}}
+_To be implemented in {{SPRINT_NUMBER}}_
+{{/if}}
+
+### Test Organization
+
+- Unit tests: `{{MODULE_DIR}}_test.go`, `internal/*/..._test.go`
+- Integration tests: `integration_test.go` (tag: `integration`)
+- Mocks: `internal/mocks/` (if needed)
+
+---
+
+## 🔧 Development Workflow
+
+### Before Coding
+
+1. ✅ Read workspace `CLAUDE.md` + this module's `CLAUDE.md`
+2. ✅ Review `BACKLOG.md` for sprint-specific tasks
+3. ✅ Check `docs/DESIGN.md` for architectural decisions
+4. ✅ Understand bounded context boundaries
+
+### During Development
+
+1. ✅ Preserve public API (breaking changes require ADR)
+2. ✅ Keep `internal/` truly internal (implementation details)
+3. ✅ Update tests alongside code
+4. ✅ Compile frequently: `go build ./...`
+
+### After Coding
+
+1. ✅ Run tests: `go test ./...`
+2. ✅ Update `BACKLOG.md` with lessons learned
+3. ✅ Update `docs/DESIGN.md` if architecture changed
+4. ✅ Create ADR if significant decision made
+
+---
+
+## 📚 Backlog
+
+See [BACKLOG.md](BACKLOG.md) for {{SPRINT_NUMBER}} specific tasks.
+
+---
+
+## 🎯 Design Decisions
+
+See [docs/DESIGN.md](docs/DESIGN.md) for architectural decisions specific to this module.
+
+For workspace-level ADRs, see [../../docs/DESIGN/ADR/](../../docs/DESIGN/ADR/).
+
+---
+
+## 🔗 References
+
+### Workspace Documentation
+
+- [C4 Model](../../docs/DESIGN/C4_MODEL.md#{{C4_SECTION}})
+- [Plan Evolutivo](../../docs/DESIGN/ORION_2.0_PLAN_EVOLUTIVO.md#{{SPRINT_SECTION}})
+- [Workspace CLAUDE.md](../../CLAUDE.md)
+
+### Module-Specific
+
+- [README.md](README.md) - User-facing overview
+- [BACKLOG.md](BACKLOG.md) - Sprint tasks
+- [docs/DESIGN.md](docs/DESIGN.md) - Design decisions
+
+---
+
+## 🎸 Philosophy
+
+**Bounded Context Enforcement**:
+- This module is responsible ONLY for {{BOUNDED_CONTEXT}}
+- Anti-responsibilities are as important as responsibilities
+- Public API is contract, `internal/` is implementation
+
+**Complejidad por Diseño**:
+- Attack complexity through architecture, not code tricks
+- Keep `internal/` packages focused (SRP)
+- Document architectural decisions (ADR style)
+
+**KISS Auto-Recovery**:
+- Fail fast at load time, not runtime
+- Simple error handling (no panic recovery unless explicit)
+- Log errors, continue processing (graceful degradation)
+
+---
+
+**Last updated**: {{DATE}}
+**Authors**: Ernesto (Visiona) + Gaby (AI Companion)

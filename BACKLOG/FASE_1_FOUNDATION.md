@@ -143,6 +143,9 @@ outputs:
 - [C4 Model - Worker Lifecycle Component](../docs/DESIGN/C4_MODEL.md#worker-lifecycle-manager)
 - [Plan Evolutivo - Sprint 1.2](../docs/DESIGN/ORION_2.0_PLAN_EVOLUTIVO.md#12-worker-lifecycle-module)
 
+[[MANIFESTO_DISENO - Blues Style]]
+
+
 ### Lecciones Aprendidas
 
 _Se actualizará al completar el sprint_

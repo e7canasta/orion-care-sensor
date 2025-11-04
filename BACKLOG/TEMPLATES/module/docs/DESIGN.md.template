@@ -1,0 +1,346 @@
+# Design Document - {{MODULE_NAME}}
+
+**Module**: `modules/{{MODULE_DIR}}`
+**Bounded Context**: {{BOUNDED_CONTEXT}}
+**Version**: v0.1.0
+**Last Updated**: {{DATE}}
+
+---
+
+## 📋 Overview
+
+{{MODULE_OVERVIEW}}
+
+---
+
+## 🎯 Design Goals
+
+1. **{{GOAL_1_NAME}}**: {{GOAL_1_DESCRIPTION}}
+2. **{{GOAL_2_NAME}}**: {{GOAL_2_DESCRIPTION}}
+3. **{{GOAL_3_NAME}}**: {{GOAL_3_DESCRIPTION}}
+
+---
+
+## 🏗️ Architecture
+
+### High-Level Design
+
+```
+{{ASCII_ARCHITECTURE_DIAGRAM}}
+```
+
+### Component Breakdown
+
+#### {{COMPONENT_1_NAME}}
+
+**Responsibility**: {{COMPONENT_1_RESPONSIBILITY}}
+
+**Implementation**: `internal/{{COMPONENT_1_DIR}}/`
+
+**Key Functions**:
+- `{{COMPONENT_1_FUNC_1}}` - {{COMPONENT_1_FUNC_1_DESC}}
+- `{{COMPONENT_1_FUNC_2}}` - {{COMPONENT_1_FUNC_2_DESC}}
+
+#### {{COMPONENT_2_NAME}}
+
+**Responsibility**: {{COMPONENT_2_RESPONSIBILITY}}
+
+**Implementation**: `internal/{{COMPONENT_2_DIR}}/`
+
+**Key Functions**:
+- `{{COMPONENT_2_FUNC_1}}` - {{COMPONENT_2_FUNC_1_DESC}}
+- `{{COMPONENT_2_FUNC_2}}` - {{COMPONENT_2_FUNC_2_DESC}}
+
+---
+
+## 🔌 Public API Design
+
+### Interface: {{MAIN_INTERFACE}}
+
+```go
+type {{MAIN_INTERFACE}} interface {
+    // {{METHOD_1_DESCRIPTION}}
+    {{METHOD_1_SIGNATURE}}
+
+    // {{METHOD_2_DESCRIPTION}}
+    {{METHOD_2_SIGNATURE}}
+
+    // {{METHOD_3_DESCRIPTION}}
+    {{METHOD_3_SIGNATURE}}
+}
+```
+
+**Design Rationale**:
+- {{API_DESIGN_REASON_1}}
+- {{API_DESIGN_REASON_2}}
+- {{API_DESIGN_REASON_3}}
+
+### Types
+
+```go
+// {{TYPE_1_NAME}} represents {{TYPE_1_PURPOSE}}
+type {{TYPE_1_NAME}} struct {
+    {{TYPE_1_FIELD_1}} {{TYPE_1_FIELD_1_TYPE}}  // {{TYPE_1_FIELD_1_DESC}}
+    {{TYPE_1_FIELD_2}} {{TYPE_1_FIELD_2_TYPE}}  // {{TYPE_1_FIELD_2_DESC}}
+}
+```
+
+---
+
+## 🔀 Data Flow
+
+### {{DATA_FLOW_SCENARIO_1}}
+
+```
+{{DATA_FLOW_1_DIAGRAM}}
+```
+
+**Steps**:
+1. {{DATA_FLOW_1_STEP_1}}
+2. {{DATA_FLOW_1_STEP_2}}
+3. {{DATA_FLOW_1_STEP_3}}
+
+### {{DATA_FLOW_SCENARIO_2}}
+
+```
+{{DATA_FLOW_2_DIAGRAM}}
+```
+
+**Steps**:
+1. {{DATA_FLOW_2_STEP_1}}
+2. {{DATA_FLOW_2_STEP_2}}
+3. {{DATA_FLOW_2_STEP_3}}
+
+---
+
+## 🎨 Design Patterns
+
+### {{PATTERN_1_NAME}}
+
+**Usage**: {{PATTERN_1_USAGE}}
+
+**Rationale**: {{PATTERN_1_RATIONALE}}
+
+**Implementation**:
+```go
+{{PATTERN_1_CODE_EXAMPLE}}
+```
+
+### {{PATTERN_2_NAME}}
+
+**Usage**: {{PATTERN_2_USAGE}}
+
+**Rationale**: {{PATTERN_2_RATIONALE}}
+
+**Implementation**:
+```go
+{{PATTERN_2_CODE_EXAMPLE}}
+```
+
+---
+
+## ⚡ Performance Considerations
+
+### {{PERF_CONSIDERATION_1}}
+
+**Issue**: {{PERF_ISSUE_1}}
+
+**Solution**: {{PERF_SOLUTION_1}}
+
+**Trade-offs**:
+- ✅ {{PERF_TRADEOFF_1_PRO}}
+- ⚠️ {{PERF_TRADEOFF_1_CON}}
+
+### {{PERF_CONSIDERATION_2}}
+
+**Issue**: {{PERF_ISSUE_2}}
+
+**Solution**: {{PERF_SOLUTION_2}}
+
+**Trade-offs**:
+- ✅ {{PERF_TRADEOFF_2_PRO}}
+- ⚠️ {{PERF_TRADEOFF_2_CON}}
+
+---
+
+## 🔒 Error Handling
+
+### Strategy
+
+{{ERROR_HANDLING_STRATEGY}}
+
+**Principles**:
+- ✅ {{ERROR_PRINCIPLE_1}}
+- ✅ {{ERROR_PRINCIPLE_2}}
+- ✅ {{ERROR_PRINCIPLE_3}}
+
+### Error Types
+
+```go
+// {{ERROR_TYPE_1}} represents {{ERROR_TYPE_1_DESC}}
+type {{ERROR_TYPE_1}} struct {
+    {{ERROR_FIELD_1}} {{ERROR_FIELD_1_TYPE}}
+}
+
+func (e *{{ERROR_TYPE_1}}) Error() string {
+    return {{ERROR_FORMAT_1}}
+}
+```
+
+---
+
+## 🧪 Testing Strategy
+
+### Unit Tests
+
+**Coverage Target**: {{UNIT_TEST_COVERAGE}}%
+
+**Approach**:
+- {{UNIT_TEST_APPROACH_1}}
+- {{UNIT_TEST_APPROACH_2}}
+
+**Mocking**:
+- {{MOCK_DESCRIPTION_1}}
+- {{MOCK_DESCRIPTION_2}}
+
+### Integration Tests
+
+**Scope**: {{INTEGRATION_TEST_SCOPE}}
+
+**Setup**:
+```go
+{{INTEGRATION_TEST_SETUP}}
+```
+
+**Test Cases**:
+1. {{INTEGRATION_TEST_CASE_1}}
+2. {{INTEGRATION_TEST_CASE_2}}
+3. {{INTEGRATION_TEST_CASE_3}}
+
+---
+
+## 🔗 Dependencies
+
+### External Packages
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| {{EXTERNAL_DEP_1}} | {{EXTERNAL_DEP_1_VERSION}} | {{EXTERNAL_DEP_1_PURPOSE}} |
+| {{EXTERNAL_DEP_2}} | {{EXTERNAL_DEP_2_VERSION}} | {{EXTERNAL_DEP_2_PURPOSE}} |
+
+### Workspace Modules
+
+{{#if HAS_WORKSPACE_DEPS}}
+| Module | Purpose |
+|--------|---------|
+| {{WORKSPACE_DEP_1}} | {{WORKSPACE_DEP_1_PURPOSE}} |
+| {{WORKSPACE_DEP_2}} | {{WORKSPACE_DEP_2_PURPOSE}} |
+{{else}}
+None (leaf module)
+{{/if}}
+
+---
+
+## 🚧 Constraints
+
+### Technical Constraints
+
+- {{CONSTRAINT_1}}
+- {{CONSTRAINT_2}}
+- {{CONSTRAINT_3}}
+
+### Business Constraints
+
+- {{BUSINESS_CONSTRAINT_1}}
+- {{BUSINESS_CONSTRAINT_2}}
+
+---
+
+## 📊 Design Decisions
+
+### Decision 1: {{DECISION_1_TITLE}}
+
+**Context**: {{DECISION_1_CONTEXT}}
+
+**Options Considered**:
+1. {{DECISION_1_OPTION_1}} - {{DECISION_1_OPTION_1_PROS_CONS}}
+2. {{DECISION_1_OPTION_2}} - {{DECISION_1_OPTION_2_PROS_CONS}}
+3. {{DECISION_1_OPTION_3}} - {{DECISION_1_OPTION_3_PROS_CONS}}
+
+**Decision**: {{DECISION_1_CHOSEN}}
+
+**Rationale**: {{DECISION_1_RATIONALE}}
+
+**Consequences**:
+- ✅ {{DECISION_1_CONSEQUENCE_PRO}}
+- ⚠️ {{DECISION_1_CONSEQUENCE_CON}}
+
+---
+
+### Decision 2: {{DECISION_2_TITLE}}
+
+**Context**: {{DECISION_2_CONTEXT}}
+
+**Options Considered**:
+1. {{DECISION_2_OPTION_1}}
+2. {{DECISION_2_OPTION_2}}
+
+**Decision**: {{DECISION_2_CHOSEN}}
+
+**Rationale**: {{DECISION_2_RATIONALE}}
+
+**Consequences**:
+- ✅ {{DECISION_2_CONSEQUENCE_PRO}}
+- ⚠️ {{DECISION_2_CONSEQUENCE_CON}}
+
+---
+
+## 🔮 Future Enhancements
+
+### Short-term (Next Sprint)
+
+- [ ] {{ENHANCEMENT_SHORT_1}}
+- [ ] {{ENHANCEMENT_SHORT_2}}
+
+### Long-term (v2.0+)
+
+- [ ] {{ENHANCEMENT_LONG_1}}
+- [ ] {{ENHANCEMENT_LONG_2}}
+
+---
+
+## 📚 References
+
+### Workspace Documentation
+
+- [C4 Model - {{C4_COMPONENT_NAME}}](../../../docs/DESIGN/C4_MODEL.md#{{C4_SECTION}})
+- [Plan Evolutivo](../../../docs/DESIGN/ORION_2.0_PLAN_EVOLUTIVO.md)
+- [ADR Index](../../../docs/DESIGN/ADR/README.md)
+
+### External Resources
+
+{{#if HAS_EXTERNAL_REFS}}
+- [{{EXTERNAL_REF_1_TITLE}}]({{EXTERNAL_REF_1_URL}})
+- [{{EXTERNAL_REF_2_TITLE}}]({{EXTERNAL_REF_2_URL}})
+{{else}}
+_None_
+{{/if}}
+
+---
+
+## 🎸 Design Philosophy
+
+**Bounded Context Enforcement**:
+- {{PHILOSOPHY_BOUNDED_CONTEXT}}
+
+**Complejidad por Diseño**:
+- {{PHILOSOPHY_COMPLEXITY}}
+
+**Pragmatismo > Purismo**:
+- {{PHILOSOPHY_PRAGMATISM}}
+
+---
+
+**Last Updated**: {{DATE}}
+**Authors**: Ernesto (Visiona) + Gaby (AI Companion)
+**Status**: 🔄 Living Document

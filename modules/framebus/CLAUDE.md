@@ -345,8 +345,37 @@ See `docs/adr/` for detailed rationale:
 - [ADR-002: Non-blocking Publish with Drop Policy](docs/adr/002-non-blocking-publish-drop-policy.md)
 - [ADR-003: Stats Tracking Design](docs/adr/003-stats-tracking-design.md)
 
+## Module Structure (Updated 2025-11-04)
+
+FrameBus follows Go's `internal/` package convention for clear API boundaries:
+
+```
+framebus/
+├── framebus.go         # Public API (type aliases to internal types)
+├── helpers.go          # Public utility functions
+├── helpers_test.go     # Helper function tests
+├── doc.go              # Package documentation
+└── internal/
+    └── bus/
+        ├── bus.go      # Implementation (encapsulated)
+        └── bus_test.go # Implementation tests
+```
+
+**Why internal/?**
+- ✅ Compiler-enforced bounded context
+- ✅ Prevents coupling to implementation details
+- ✅ Enables evolution without breaking changes
+- ✅ Clear separation: API contract vs implementation
+
+**For consumers:** No changes needed. All examples in this doc work as-is.
+**For contributors:** Implementation in `internal/bus/`, public contract in `framebus.go`.
+
 ## References
 
 - Prototype implementation: `/References/orion-prototipe/internal/framebus/bus.go`
 - Wiki documentation: `/VAULT/wiki/2.4-frame-distribution.md`
-- Design session: `/Daily.md` (Sesión de Café - FrameBus Design)
+- Refactor summary: `INTERNAL_REFACTOR_SUMMARY.md`
+- Quick wins summary: `QUICK_WINS_SUMMARY.md`
+
+* [[modules/framebus/README]]
+

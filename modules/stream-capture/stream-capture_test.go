@@ -1,6 +1,39 @@
 package streamcapture_test
 
+/*
+
+1. ✅ ExampleNewRTSPStream()
+- Muestra configuración básica
+- Aparecerá en godoc de NewRTSPStream()
+
+2. ✅ ExampleRTSPStream_Start()
+- Muestra workflow completo: Start → Warmup → Process frames
+- Comentado (no ejecutable) porque requiere RTSP real
+
+3. ✅ ExampleRTSPStream_SetTargetFPS()
+- Muestra hot-reload de FPS
+- Comentado (no ejecutable) porque requiere stream activo
+
+4. ✅ ExampleRTSPStream_Stats()
+- Muestra monitoreo de estadísticas
+- Comentado (no ejecutable) porque requiere stream activo
+
+5. ✅ ExampleResolution_Dimensions()
+- Ejecutable con Output verificable
+- PASS ✓
+
+6. ✅ ExampleResolution_String()
+- Ejecutable con Output verificable
+- PASS ✓
+
+7. ✅ ExampleHardwareAccel()
+- Muestra 3 modos de aceleración
+- Constructor pattern
+
+*/
+
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -296,4 +329,141 @@ func almostEqual(a, b, epsilon float64) bool {
 		diff = -diff
 	}
 	return diff < epsilon
+}
+
+// Example functions for godoc (appear in pkg.go.dev)
+
+// ExampleNewRTSPStream demonstrates basic stream creation and validation.
+func ExampleNewRTSPStream() {
+	cfg := streamcapture.RTSPConfig{
+		URL:          "rtsp://192.168.1.100/stream",
+		Resolution:   streamcapture.Res720p,
+		TargetFPS:    2.0,
+		SourceStream: "camera-1",
+		Acceleration: streamcapture.AccelAuto,
+	}
+
+	stream, err := streamcapture.NewRTSPStream(cfg)
+	if err != nil {
+		// Handle error (e.g., GStreamer not available, invalid config)
+		return
+	}
+
+	// Stream created successfully
+	_ = stream
+}
+
+// ExampleRTSPStream_Start demonstrates frame capture from an RTSP stream.
+//
+// Note: This example requires a real RTSP stream to execute.
+func ExampleRTSPStream_Start() {
+	// cfg := streamcapture.RTSPConfig{
+	// 	URL:        "rtsp://camera/stream",
+	// 	Resolution: streamcapture.Res720p,
+	// 	TargetFPS:  2.0,
+	// }
+	//
+	// stream, _ := streamcapture.NewRTSPStream(cfg)
+	// defer stream.Stop()
+	//
+	// ctx := context.Background()
+	// frameChan, err := stream.Start(ctx)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	//
+	// // Recommended: Warmup to measure FPS stability
+	// stats, _ := stream.Warmup(ctx, 5*time.Second)
+	// log.Printf("Stream stable: %v, FPS: %.2f", stats.IsStable, stats.FPSMean)
+	//
+	// // Process frames
+	// for frame := range frameChan {
+	// 	log.Printf("Frame %d: %dx%d, %d bytes",
+	// 		frame.Seq, frame.Width, frame.Height, len(frame.Data))
+	// }
+}
+
+// ExampleRTSPStream_SetTargetFPS demonstrates hot-reloading FPS without stream restart.
+func ExampleRTSPStream_SetTargetFPS() {
+	// cfg := streamcapture.RTSPConfig{
+	// 	URL:        "rtsp://camera/stream",
+	// 	TargetFPS:  2.0,
+	// 	Resolution: streamcapture.Res720p,
+	// }
+	//
+	// stream, _ := streamcapture.NewRTSPStream(cfg)
+	// stream.Start(context.Background())
+	// defer stream.Stop()
+	//
+	// // Change FPS dynamically (~2s interruption)
+	// err := stream.SetTargetFPS(0.5) // 1 frame every 2 seconds
+	// if err != nil {
+	// 	log.Printf("FPS change failed: %v", err)
+	// }
+	//
+	// // Stream continues with new FPS
+}
+
+// ExampleRTSPStream_Stats demonstrates statistics monitoring.
+func ExampleRTSPStream_Stats() {
+	// cfg := streamcapture.RTSPConfig{
+	// 	URL:        "rtsp://camera/stream",
+	// 	TargetFPS:  2.0,
+	// 	Resolution: streamcapture.Res720p,
+	// }
+	//
+	// stream, _ := streamcapture.NewRTSPStream(cfg)
+	// stream.Start(context.Background())
+	// defer stream.Stop()
+	//
+	// // Check statistics (thread-safe, can call from any goroutine)
+	// stats := stream.Stats()
+	// fmt.Printf("FPS: %.2f (target: %.2f)\n", stats.FPSReal, stats.FPSTarget)
+	// fmt.Printf("Latency: %dms\n", stats.LatencyMS)
+	// fmt.Printf("Frames captured: %d\n", stats.FrameCount)
+	// fmt.Printf("Drop rate: %.2f%%\n", stats.DropRate)
+	//
+	// if stats.UsingVAAPI {
+	// 	fmt.Printf("VAAPI decode latency (mean): %.2fms\n", stats.DecodeLatencyMeanMS)
+	// }
+}
+
+// ExampleResolution_Dimensions demonstrates resolution dimension lookup.
+func ExampleResolution_Dimensions() {
+	width, height := streamcapture.Res720p.Dimensions()
+	fmt.Printf("%d %d\n", width, height)
+	// Output: 1280 720
+}
+
+// ExampleResolution_String demonstrates resolution string representation.
+func ExampleResolution_String() {
+	fmt.Println(streamcapture.Res720p.String())
+	fmt.Println(streamcapture.Res1080p.String())
+	// Output: 720p
+	// 1080p
+}
+
+// ExampleHardwareAccel demonstrates acceleration mode selection.
+func ExampleHardwareAccel() {
+	// Auto mode (recommended): Try VAAPI, fallback to software
+	cfg := streamcapture.RTSPConfig{
+		URL:          "rtsp://camera/stream",
+		Acceleration: streamcapture.AccelAuto,
+	}
+
+	// Force VAAPI (fail-fast if unavailable)
+	cfgVAAPI := streamcapture.RTSPConfig{
+		URL:          "rtsp://camera/stream",
+		Acceleration: streamcapture.AccelVAAPI,
+	}
+
+	// Force software decode (debugging/compatibility)
+	cfgSoftware := streamcapture.RTSPConfig{
+		URL:          "rtsp://camera/stream",
+		Acceleration: streamcapture.AccelSoftware,
+	}
+
+	_, _ = streamcapture.NewRTSPStream(cfg)
+	_, _ = streamcapture.NewRTSPStream(cfgVAAPI)
+	_, _ = streamcapture.NewRTSPStream(cfgSoftware)
 }

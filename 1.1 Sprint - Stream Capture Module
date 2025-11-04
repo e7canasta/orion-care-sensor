@@ -1,0 +1,42 @@
+
+## 🔨 Sprint 1.1: Stream Capture Module
+
+**Issue**: [#1 - Sprint 1.1: Stream Capture Module](https://github.com/e7canasta/orion-care-sensor/issues/1)
+
+### Bounded Context
+
+**Responsabilidad:**
+- ✅ Capturar frames RTSP
+- ✅ Reconexión automática
+- ✅ FPS adaptativo
+
+**Anti-responsabilidad:**
+- ❌ NO procesa frames
+- ❌ NO decide qué capturar
+
+### Entregables
+
+```
+internal/stream/
+├── capture.go          # RTSP capture, reconnection
+├── framebus.go         # Non-blocking fan-out (existente)
+└── warm_up.go          # FPS measurement (existente)
+```
+
+### Acceptance Criteria
+
+- [ ] RTSP stream se captura correctamente
+- [ ] Reconexión automática en caso de fallo
+- [ ] FPS se mide durante warm-up (5 segundos)
+- [ ] Frames se distribuyen a FrameBus sin bloqueo
+- [ ] Unit tests: Mock RTSP, validar FPS
+- [ ] Integration tests: RTSP real, reconexión
+
+### Referencias
+
+- [C4 Model - Stream Capture Component](../docs/DESIGN/C4_MODEL.md#c3---component-diagram)
+- [Plan Evolutivo - Sprint 1.1](../docs/DESIGN/ORION_2.0_PLAN_EVOLUTIVO.md#11-stream-capture-module)
+
+### Lecciones Aprendidas
+
+_Se actualizará al completar el sprint_

@@ -8,7 +8,7 @@
 
 ## 🎯 Sprint Goal
 
-Implement RTSP stream capture with reconnection and FPS adaptation
+Implementar captura RTSP con reconexión automática y FPS adaptativo, atacando la complejidad por diseño mediante separación en módulos internos.
 
 ---
 
@@ -16,12 +16,26 @@ Implement RTSP stream capture with reconnection and FPS adaptation
 
 | Task | Status | Estimación | Owner |
 |------|--------|------------|-------|
-| Setup GStreamer pipeline for RTSP | ⬜ Todo | 3 días | Ernesto + Gaby |
-| Implement reconnection logic | ⬜ Todo | 3 días | Ernesto + Gaby |
-| Add FPS warm-up measurement | ⬜ Todo | 2 días | Ernesto + Gaby |
-| Integrate with FrameBus | ⬜ Todo | 2 días | Ernesto + Gaby |
+| **Phase 1: Types & Public API** | | | |
+| Define `Frame`, `StreamStats`, `Resolution` types | ⬜ Todo | 0.5 día | Ernesto + Gaby |
+| Define `StreamProvider` interface | ⬜ Todo | 0.5 día | Ernesto + Gaby |
+| **Phase 2: Internal Pipeline** | | | |
+| `internal/rtsp/pipeline.go` - GStreamer setup | ⬜ Todo | 2 días | Ernesto + Gaby |
+| `internal/rtsp/callbacks.go` - onNewSample, pad-added | ⬜ Todo | 1 día | Ernesto + Gaby |
+| `internal/rtsp/reconnect.go` - Exponential backoff | ⬜ Todo | 1.5 días | Ernesto + Gaby |
+| **Phase 3: Warm-up** | | | |
+| `internal/warmup/warmup.go` - 5s measurement | ⬜ Todo | 1 día | Ernesto + Gaby |
+| `internal/warmup/stats.go` - FPS statistics | ⬜ Todo | 0.5 día | Ernesto + Gaby |
+| **Phase 4: RTSPStream Public API** | | | |
+| `rtsp.go` - Lifecycle (Start/Stop/Stats) | ⬜ Todo | 1 día | Ernesto + Gaby |
+| `rtsp.go` - Hot-reload (SetTargetFPS) | ⬜ Todo | 1 día | Ernesto + Gaby |
+| **Phase 5: Testing & Validation** | | | |
+| Manual test: RTSP connection (real camera) | ⬜ Todo | 0.5 día | Ernesto |
+| Manual test: Reconnection (disconnect go2rtc) | ⬜ Todo | 0.5 día | Ernesto |
+| Manual test: Hot-reload FPS (MQTT command) | ⬜ Todo | 0.5 día | Ernesto |
+| Manual test: Warm-up stats verification | ⬜ Todo | 0.5 día | Ernesto |
 
-**Total estimado**: 2 semanas
+**Total estimado**: 2 semanas (10 días hábiles)
 
 ---
 
@@ -29,68 +43,200 @@ Implement RTSP stream capture with reconnection and FPS adaptation
 
 ### Functional
 
-- [ ] RTSP stream captures frames correctly
-- [ ] Reconnection works after stream failure
-- [ ] FPS measured during 5-second warm-up
+- [ ] RTSP stream se captura correctamente (RGB frames via GStreamer)
+- [ ] Reconexión automática en caso de fallo (5 reintentos con backoff exponencial)
+- [ ] FPS se mide durante warm-up (5 segundos)
+- [ ] Hot-reload de FPS sin reiniciar pipeline (~2s interrupción)
+- [ ] Frames se distribuyen a canal sin bloqueo (drop policy)
 
 ### Non-Functional
 
-- [ ] Latency < 2 seconds
-- [ ] Graceful degradation on errors
-- [ ] Memory usage stable (no leaks)
+- [ ] Latency < 2 segundos (non-blocking channel sends)
+- [ ] Graceful degradation on errors (log + continue)
+- [ ] Memory usage estable (no leaks en GStreamer buffers)
+- [ ] Cada archivo < 150 líneas (SRP enforcement)
 
 ### Testing
 
-- [ ] Unit tests: 80% coverage
-- [ ] Integration tests: Test with real RTSP camera
-- [ ] Manual testing: Visual inspection of frame capture
+- [ ] Compilation tests: `go build ./...` (ALWAYS)
+- [ ] Integration tests: Test con RTSP real (manual, pair-programming)
+- [ ] Reconnection test: Desconectar/reconectar go2rtc (manual)
+- [ ] Hot-reload test: Cambiar FPS via SetTargetFPS (manual)
 
 ---
 
 ## 🏗️ Implementation Plan
 
-### Phase 1: Setup (3 días)
+### Phase 1: Types & Public API (1 día)
 
-**Goal**: GStreamer pipeline functional
+**Goal**: Definir contratos públicos del módulo
 
 **Tasks**:
-1. Setup GStreamer CGo bindings
-2. Create RTSP pipeline (rtspsrc → videorate → jpegenc)
-3. Emit frames to channel
+1. `types.go`: Frame, StreamStats, Resolution enum
+2. `provider.go`: StreamProvider interface
+3. Validation: `Resolution.Dimensions()`, fail-fast en constructor
 
 **Deliverables**:
-- RTSPStream implementation
-- Basic frame capture working
+- `types.go` con tipos exportados
+- `provider.go` con interface pública
+- Compilación exitosa
+
+**Acceptance**:
+```bash
+cd modules/stream-capture
+go build ./...
+```
 
 ---
 
-### Phase 2: Core Implementation (5 días)
+### Phase 2: Internal Pipeline (4.5 días)
 
-**Goal**: Reconnection and FPS adaptation
+**Goal**: GStreamer pipeline funcional con reconexión
 
 **Tasks**:
-1. Implement reconnection on failure
-2. Add FPS warm-up measurement (5s)
-3. SetTargetFPS triggers reconnection
+
+#### 2.1 `internal/rtsp/pipeline.go` (2 días)
+- `CreatePipeline(config) → *gst.Pipeline`
+- GStreamer elements: rtspsrc → rtph264depay → avdec_h264 → videoconvert → videoscale → videorate → capsfilter → appsink
+- `UpdateFramerateCaps(capsfilter, fps, w, h) error` (hot-reload support)
+- `DestroyPipeline(pipeline) error`
+
+#### 2.2 `internal/rtsp/callbacks.go` (1 día)
+- `OnNewSample(sink *app.Sink, frameChan chan<- Frame) gst.FlowReturn`
+  - Pull sample, map buffer, copy data
+  - Create Frame struct with metadata
+  - Non-blocking send to channel
+- `OnPadAdded(srcPad *gst.Pad, sinkElement *gst.Element)`
+  - Link dynamic rtspsrc pads to rtph264depay
+
+#### 2.3 `internal/rtsp/reconnect.go` (1.5 días)
+- `RunWithReconnect(ctx, connectFn, config) error`
+  - Exponential backoff: 1s → 2s → 4s → 8s → 16s (cap 30s)
+  - Max 5 retries
+  - Reset counter on successful connection
+- `ReconnectConfig` struct (maxRetries, retryDelay, maxRetryDelay)
 
 **Deliverables**:
-- Reconnection logic implemented
-- FPS adaptation working
+- `internal/rtsp/` package completo
+- GStreamer pipeline funcional
+- Reconnection logic tested (manual disconnect)
+
+**Acceptance**:
+- Compilación exitosa
+- Manual test: Desconectar go2rtc → observar logs de reconnection
 
 ---
 
-### Phase 3: Testing & Integration (2 días)
+### Phase 3: Warm-up (1.5 días)
 
-**Goal**: Testing and integration
+**Goal**: Medición automática de FPS real durante 5 segundos
 
 **Tasks**:
-1. Unit tests with mock RTSP
-2. Integration tests with real camera
-3. FrameBus integration validation
+
+#### 3.1 `internal/warmup/warmup.go` (1 día)
+- `WarmupStream(ctx, frames <-chan Frame, duration) (*WarmupStats, error)`
+- Consume frames sin procesarlos
+- Track frame arrival times
+- Timeout context (5 segundos)
+
+#### 3.2 `internal/warmup/stats.go` (0.5 día)
+- `calculateFPSStats(frameTimes []time.Time) *WarmupStats`
+  - FPS mean, stddev, min, max
+  - Stability check: `stddev < 15% of mean`
+- `CalculateOptimalInferenceRate(warmupStats, maxRate) float64`
 
 **Deliverables**:
-- 80% test coverage
-- Integration validated
+- `internal/warmup/` package completo
+- Warm-up automático en `Start()`
+- Logs de FPS stability
+
+**Acceptance**:
+- Warm-up logs muestran FPS mean, stddev, range
+- Warning si stream inestable (stddev > 15%)
+
+---
+
+### Phase 4: RTSPStream Public API (2 días)
+
+**Goal**: Implementación pública de StreamProvider
+
+**Tasks**:
+
+#### 4.1 `rtsp.go` - Lifecycle (1 día)
+- `NewRTSPStream(cfg RTSPConfig) (*RTSPStream, error)`
+  - Fail-fast validation (URL, FPS, Resolution)
+  - Check GStreamer availability
+- `Start(ctx) (<-chan Frame, error)`
+  - Call `internal/rtsp.CreatePipeline()`
+  - Run `internal/warmup.WarmupStream()`
+  - Launch `runPipeline()` goroutine
+  - Return frame channel
+- `Stop() error`
+  - Cancel context
+  - Wait for goroutines (timeout 3s)
+  - Destroy pipeline
+  - Reset state for restart
+- `Stats() StreamStats`
+  - Atomic reads of frameCount, reconnects, bytesRead
+  - Calculate FPS real, latency
+
+#### 4.2 `rtsp.go` - Hot-reload (1 día)
+- `SetTargetFPS(fps float64) error`
+  - Validate FPS (0.1-30)
+  - Call `internal/rtsp.UpdateFramerateCaps()`
+  - Rollback on error
+  - Log old/new FPS
+
+**Deliverables**:
+- `rtsp.go` completo
+- StreamProvider interface implementada
+- Hot-reload funcional
+
+**Acceptance**:
+- Manual test: Start → SetTargetFPS(0.5) → observar cambio en logs
+- Manual test: Start → Stop → Start (restart validation)
+
+---
+
+### Phase 5: Testing & Validation (2 días)
+
+**Goal**: Validación manual con pair-programming
+
+**Tasks** (todos manuales, Ernesto ejecuta, Gaby observa):
+
+1. **RTSP Connection Test** (0.5 día)
+   - Start con URL real
+   - Verificar frames en logs
+   - Verificar Stats() output
+
+2. **Reconnection Test** (0.5 día)
+   - Start stream
+   - Desconectar go2rtc
+   - Observar logs de reconnection (5 reintentos)
+   - Reconectar go2rtc
+   - Verificar stream resume
+
+3. **Hot-reload FPS Test** (0.5 día)
+   - Start con FPS=2.0
+   - SetTargetFPS(0.5)
+   - Observar logs de caps update
+   - Verificar ~2s interrupción
+   - Verificar FPS en Stats()
+
+4. **Warm-up Stats Test** (0.5 día)
+   - Start stream
+   - Verificar logs de warm-up (5s)
+   - Verificar FPS mean/stddev
+   - Verificar stability warning (si aplica)
+
+**Deliverables**:
+- Test report (manual notes)
+- Lecciones aprendidas (documentar en BACKLOG)
+
+**Acceptance**:
+- Todos los tests pasan (observación directa)
+- No memory leaks (observar con `top`/`htop`)
+- Logs claros y concisos
 
 ---
 
@@ -99,12 +245,14 @@ Implement RTSP stream capture with reconnection and FPS adaptation
 ### Public API Design
 
 ```go
-// stream-capture/{{API_FILE}}.go
+// modules/stream-capture/provider.go
 package streamcapture
 
-type {{INTERFACE_NAME}} interface {
-    Start(ctx context.Context) (<-chan Frame, error)  // Start streaming, returns channel of frames
-    Stop() error  // Stop streaming gracefully
+type StreamProvider interface {
+    Start(ctx context.Context) (<-chan Frame, error)
+    Stop() error
+    Stats() StreamStats
+    SetTargetFPS(fps float64) error
 }
 ```
 
@@ -112,45 +260,59 @@ type {{INTERFACE_NAME}} interface {
 
 ```
 modules/stream-capture/
-├── internal/
-│   ├── rtsp/  # GStreamer pipeline management
-│   └── warmup/  # FPS measurement logic
-├── {{API_FILE}}.go              # Public interface
-├── {{IMPL_FILE}}.go             # Implementation
-└── types.go                     # Exported types
+├── go.mod                   # github.com/e7canasta/orion-care-sensor/modules/stream-capture
+├── CLAUDE.md                # Module guide (bounded context)
+├── README.md                # User-facing overview
+├── BACKLOG.md               # This file
+├── docs/
+│   ├── DESIGN.md            # Design decisions (to be created)
+│   └── proposals/           # RFCs (future)
+│
+├── provider.go              # StreamProvider interface
+├── rtsp.go                  # RTSPStream implementation
+├── types.go                 # Frame, StreamStats, Resolution
+├── stream-capture_test.go   # Public tests (future)
+│
+└── internal/
+    ├── rtsp/
+    │   ├── pipeline.go      # GStreamer pipeline setup/teardown
+    │   ├── callbacks.go     # onNewSample, onPadAdded
+    │   └── reconnect.go     # Exponential backoff logic
+    └── warmup/
+        ├── warmup.go        # WarmupStream implementation
+        └── stats.go         # FPS statistics calculation
 ```
 
 ### Dependencies
 
-**Required**:
-- {{DEPENDENCY_1}} - {{DEPENDENCY_1_PURPOSE}}
-- {{DEPENDENCY_2}} - {{DEPENDENCY_2_PURPOSE}}
+**External**:
+- `github.com/tinyzimmer/go-gst` v0.3.2 - GStreamer Go bindings
+- `github.com/google/uuid` v1.6.0 - TraceID generation
 
-**Optional**:
-- {{OPTIONAL_DEP_1}} - {{OPTIONAL_DEP_1_PURPOSE}}
+**System**:
+- GStreamer 1.x (runtime dependency)
+- GStreamer plugins: rtspsrc, rtph264depay, avdec_h264, videoconvert, videoscale, videorate
+
+**Workspace Modules**:
+- None (leaf module, no internal dependencies)
 
 ---
 
 ## 🚧 Blockers
 
-{{#if HAS_BLOCKERS}}
-| Blocker | Impact | Resolution |
-|---------|--------|------------|
-| {{BLOCKER_1}} | {{BLOCKER_1_IMPACT}} | {{BLOCKER_1_RESOLUTION}} |
-{{else}}
 _Ninguno por ahora_
-{{/if}}
 
 ---
 
 ## 🤔 Decisiones Pendientes
 
-{{#if HAS_PENDING_DECISIONS}}
-- [ ] {{DECISION_1}} - _Opciones: {{DECISION_1_OPTIONS}}_
-- [ ] {{DECISION_2}} - _Opciones: {{DECISION_2_OPTIONS}}_
-{{else}}
-_Ninguna por ahora_
-{{/if}}
+- [ ] **Frame format**: ¿RGB o BGR? - _Opciones: RGB (GStreamer default), BGR (OpenCV compat)_
+  - **Decisión temporal**: RGB (mantener prototipo)
+  - **Rationale**: Workers Python usan ONNX, no OpenCV directo
+
+- [ ] **Warm-up duration**: ¿5s o configurable? - _Opciones: Hardcoded 5s, configurable en RTSPConfig_
+  - **Decisión temporal**: Hardcoded 5s
+  - **Rationale**: KISS, valor probado en prototipo
 
 ---
 
@@ -158,27 +320,27 @@ _Ninguna por ahora_
 
 ### Antes de codear
 
-- [ ] Leo workspace `CLAUDE.md` + module `CLAUDE.md`
-- [ ] Identifico bounded context (Responsibility + Anti-responsibility)
+- [x] Leo workspace `CLAUDE.md` + module `CLAUDE.md`
+- [x] Identifico bounded context (Stream Acquisition)
 - [ ] Reviso `docs/DESIGN.md` para decisiones existentes
-- [ ] Propongo 2-3 opciones de diseño (si aplica)
-- [ ] Evalúo trade-offs con Ernesto
-- [ ] Elijo "quick win"
+- [x] Propongo estructura interna (pipeline, callbacks, reconnect, warmup)
+- [x] Evalúo trade-offs: Monolito vs Modular → **Modular wins** (SRP)
+- [x] Elijo "quick win": Types & Public API primero
 
 ### Durante desarrollo
 
-- [ ] Commits atómicos
+- [ ] Commits atómicos (por phase)
 - [ ] Compilo después de cada paso: `go build ./...`
-- [ ] Tests unitarios + integration
+- [ ] Tests manuales con Ernesto (pair-programming)
 - [ ] Preservo API pública (breaking changes → ADR)
 
 ### Después de codear
 
 - [ ] Pair review con Ernesto
 - [ ] Actualizo `CLAUDE.md` si API cambió
-- [ ] Actualizo `docs/DESIGN.md` si arquitectura cambió
+- [ ] Actualizo `docs/DESIGN.md` con decisiones tomadas
 - [ ] Documento lecciones aprendidas (sección abajo)
-- [ ] Identifico próximos pasos
+- [ ] Identifico próximos pasos (integración con FrameBus)
 
 ---
 
@@ -188,22 +350,15 @@ _Se actualizará al completar el sprint_
 
 ### Lo que Funcionó Bien ✅
 
-- {{LESSON_SUCCESS_1}}
-- {{LESSON_SUCCESS_2}}
+- _TBD_
 
 ### Mejoras para Próximas Sesiones 📈
 
-- {{LESSON_IMPROVEMENT_1}}
-- {{LESSON_IMPROVEMENT_2}}
+- _TBD_
 
 ### Deuda Técnica Identificada 🚨
 
-{{#if HAS_TECH_DEBT}}
-- {{TECH_DEBT_1}} - _Prioridad: {{TECH_DEBT_1_PRIORITY}}_
-- {{TECH_DEBT_2}} - _Prioridad: {{TECH_DEBT_2_PRIORITY}}_
-{{else}}
 _Ninguna por ahora_
-{{/if}}
 
 ---
 
@@ -221,8 +376,14 @@ _Ninguna por ahora_
 - [README.md](README.md) - User-facing overview
 - [docs/DESIGN.md](docs/DESIGN.md) - Design decisions
 
+### Prototipo (Reference)
+
+- [Orion 1.0 - internal/stream/rtsp.go](../../References/orion-prototipe/internal/stream/rtsp.go)
+- [Orion 1.0 - internal/stream/warmup.go](../../References/orion-prototipe/internal/stream/warmup.go)
+- [Wiki - Stream Providers](../../VAULT/wiki/2.2-stream-providers.md)
+
 ---
 
 **Última actualización**: 2025-11-03
 **Estado**: 🔄 In Progress
-**Próximo paso**: Implement GStreamer pipeline setup
+**Próximo paso**: Create `docs/DESIGN.md` con decisiones arquitectónicas

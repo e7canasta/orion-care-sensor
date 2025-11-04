@@ -936,6 +936,92 @@ if err := stream.Stop(); err != nil {
 - A complete video processing system (no inference, no recording)
 - A replacement for ffmpeg/opencv (focused on real-time RTSP streams only)
 
+## Anti-Patterns & Alternatives
+
+### ❌ When NOT to Use stream-capture
+
+**Do NOT use this module for:**
+
+1. **Video Recording/Storage**
+   - **Why not:** stream-capture drops frames to maintain <2s latency (non-blocking channels). Recordings will have gaps.
+   - **Use instead:**
+     - `ffmpeg -i rtsp://camera/stream -c copy output.mp4` (no re-encoding, reliable recording)
+     - GStreamer filesink with buffering enabled
+     - go2rtc with recording mode
+
+2. **Transcoding/Re-encoding**
+   - **Why not:** stream-capture outputs raw RGB frames (uncompressed, 1280×720 = 2.7 MB/frame). Not suitable for format conversion.
+   - **Use instead:**
+     - `ffmpeg -i input.mp4 -c:v libx264 output.mp4` (codec chains)
+     - GStreamer encodebin for H.264/H.265 encoding
+     - Hardware transcoders (Intel QSV, NVIDIA NVENC)
+
+3. **High-throughput processing** (>30 FPS sustained)
+   - **Why not:** stream-capture is optimized for low-FPS inference (0.1-5 Hz) with intentional frame dropping. High-FPS requires different architecture.
+   - **Use instead:**
+     - GStreamer appsink directly (bypass Go abstraction overhead)
+     - OpenCV VideoCapture (if RTSP support sufficient)
+     - FFmpeg libraries (libavcodec/libavformat)
+
+4. **Multi-stream aggregation**
+   - **Why not:** stream-capture is 1:1 (1 stream → 1 RTSPStream instance). No built-in support for multiple cameras.
+   - **Use instead:**
+     - Orion 2.0 multi-stream architecture (see FASE_2_SCALE.md in parent repo)
+     - GStreamer multiqueue + aggregation elements
+     - Multiple RTSPStream instances with coordination layer
+
+5. **Low-level video manipulation** (overlays, filters, effects)
+   - **Why not:** stream-capture provides raw frames only. No GStreamer filter access.
+   - **Use instead:**
+     - GStreamer pipeline with videomixer, textoverlay, etc.
+     - OpenCV drawing functions (cv2.rectangle, cv2.putText)
+     - FFmpeg filters (drawtext, overlay, scale)
+
+6. **Protocols beyond RTSP** (HTTP, WebRTC, local files)
+   - **Why not:** stream-capture is RTSP-only (rtspsrc element). Other protocols require different GStreamer sources.
+   - **Use instead:**
+     - HTTP/HLS: GStreamer souphttpsrc
+     - WebRTC: go2rtc with WebRTC API
+     - Local files: GStreamer filesrc + decodebin
+
+### ✅ Ideal Use Cases
+
+stream-capture is **optimized for:**
+
+1. **Low-FPS AI inference** (0.1-5 Hz)
+   - Person detection in geriatric monitoring (1 frame/sec)
+   - Object tracking with temporal hysteresis
+   - Anomaly detection with low sampling rate
+
+2. **Real-time responsiveness** (<2s latency requirement)
+   - Fall detection alerts (must trigger within 2 seconds)
+   - Intrusion detection (immediate notification)
+   - Safety monitoring (real-time vs forensic analysis)
+
+3. **Edge deployment** (resource-constrained devices)
+   - Intel NUC with Quick Sync (VAAPI hardware acceleration)
+   - Embedded Linux (aarch64) with software decode fallback
+   - Fanless mini-PCs with thermal throttling considerations
+
+4. **Hot-reload requirements** (operational flexibility)
+   - Change FPS without stream restart (SetTargetFPS)
+   - Adjust inference rate based on scene complexity
+   - A/B testing of detection parameters in production
+
+5. **Non-blocking frame distribution** (latency over completeness)
+   - Drop frames instead of queuing (bounded memory)
+   - Predictable latency for SLO compliance
+   - Graceful degradation under load
+
+### 🔄 Migration Patterns
+
+**If you outgrow stream-capture limitations:**
+
+- **Need recording?** Add separate recording worker consuming same RTSP stream (parallel path)
+- **Need high FPS?** Migrate to GStreamer appsink + cgo (0.5ms overhead vs 2ms in stream-capture)
+- **Need multi-stream?** Use Orion 2.0 framebus pattern (fan-out to multiple workers)
+- **Need transcoding?** Add GStreamer encodebin after appsink (GPU encoding with VAAPI)
+
 ## Known Issues & Design Decisions
 
 **No BACKLOG.md yet**: This module was extracted from Orion 1.0 monolith during Sprint 1.1. Future development tracked in parent repository backlog.
@@ -977,7 +1063,13 @@ if err := stream.Stop(); err != nil {
 ## Documentation Version
 
 **Last Updated**: 2025-11-04
-**Revision**: 2.0 (Technical Consultation Quick Wins)
+**Revision**: 2.1 (Technical Consultation Quick Wins - Phase 1)
+
+**Improvements from v2.0**:
+- ✅ Added **Anti-Patterns & Alternatives** section (Quick Win #3)
+  - 6 anti-patterns with clear "Why not" + "Use instead" guidance
+  - 5 ideal use cases with concrete examples
+  - Migration patterns for outgrowing limitations
 
 **Improvements from v1.0**:
 - ✅ Added **Quick Start** section with production-ready minimal example

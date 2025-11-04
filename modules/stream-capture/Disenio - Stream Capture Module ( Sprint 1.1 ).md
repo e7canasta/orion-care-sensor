@@ -364,3 +364,141 @@ D) Hagamos un diagrama de secuencia del flujo completo (Start → Warm-up → Fr
 
 Decime por dónde arrancamos. 🎸
 
+
+---
+
+  ✅ Resumen de lo Codificado
+
+  Ernesto, ya tenemos Phase 1, 2 y 3 completas! 🎸
+
+  Phase 1: Types & Public API ✅
+
+  - types.go - Frame, StreamStats, Resolution, RTSPConfig
+  - provider.go - StreamProvider interface con documentación completa
+
+  Phase 2: Internal Pipeline ✅
+
+  - internal/rtsp/pipeline.go - GStreamer pipeline setup (CreatePipeline, UpdateFramerateCaps, DestroyPipeline)
+  - internal/rtsp/callbacks.go - OnNewSample, OnPadAdded
+  - internal/rtsp/reconnect.go - Exponential backoff logic
+
+  Phase 3: Warm-up ✅
+
+  - internal/warmup/warmup.go - WarmupStream implementation
+  - internal/warmup/stats.go - FPS statistics calculation
+
+  Estructura Actual:
+
+  modules/stream-capture/
+  ├── provider.go              ✅ (40 líneas)
+  ├── types.go                 ✅ (96 líneas)
+  ├── go.mod                   ✅ (con dependencias)
+  │
+  └── internal/
+      ├── rtsp/
+      │   ├── pipeline.go      ✅ (182 líneas)
+      │   ├── callbacks.go     ✅ (116 líneas)
+      │   └── reconnect.go     ✅ (99 líneas)
+      └── warmup/
+          ├── warmup.go        ✅ (106 líneas)
+          └── stats.go         ✅ (105 líneas)
+
+  ---
+  🚀 Próximos Pasos - Phase 4: RTSPStream Public API
+
+  Ahora necesitamos crear rtsp.go que:
+  1. Implementa StreamProvider interface
+  2. Usa internal/rtsp para pipeline
+  3. Usa internal/warmup para warm-up
+  4. Implementa Start/Stop/Stats/SetTargetFPS
+
+
+---
+
+● ---
+🎉 ¡COMPLETADO, ERNESTO! 🎸
+
+Acabamos de completar Phase 1-4 del módulo stream-capture. El código compila sin errores.
+
+✅ Lo que Tenemos Ahora:
+
+modules/stream-capture/
+├── provider.go              ✅ StreamProvider interface (80 líneas)
+├── types.go                 ✅ Frame, StreamStats, Resolution, RTSPConfig (96 líneas)
+├── rtsp.go                  ✅ RTSPStream implementation (450 líneas)
+├── go.mod                   ✅ Con dependencias (go-gst, uuid)
+│
+└── internal/
+    ├── rtsp/
+    │   ├── pipeline.go      ✅ GStreamer setup (182 líneas)
+    │   ├── callbacks.go     ✅ Frame callbacks (130 líneas)
+    │   └── reconnect.go     ✅ Exponential backoff (99 líneas)
+    └── warmup/
+        ├── warmup.go        ✅ Warm-up logic (110 líneas)
+        └── stats.go         ✅ FPS statistics (105 líneas)
+
+Total: ~1,252 líneas de código Go bien estructurado.
+
+---
+🎯 Funcionalidad Implementada:
+
+Public API ✅:
+- StreamProvider interface
+- NewRTSPStream(cfg) - Constructor con fail-fast validation
+- Start(ctx) - Inicia pipeline + warm-up (5s)
+- Stop() - Shutdown graceful (idempotent)
+- Stats() - Estadísticas thread-safe
+- SetTargetFPS(fps) - Hot-reload sin restart
+
+Internal Modules ✅:
+- internal/rtsp/pipeline.go - GStreamer pipeline management
+- internal/rtsp/callbacks.go - Frame capture callbacks
+- internal/rtsp/reconnect.go - Exponential backoff logic
+- internal/warmup/warmup.go - Stream warm-up measurement
+- internal/warmup/stats.go - FPS stability calculation
+
+---
+🏗 Arquitectura Aplicada:
+
+✅ Complejidad por diseño - Cada archivo < 200 líneas (SRP)
+✅ Fail-fast - Validation en constructor
+✅ Non-blocking - Drop policy en channels
+✅ Hot-reload - UpdateFramerateCaps (~2s vs 5-10s restart)
+✅ Thread-safe - Atomic counters, RWMutex
+✅ Bounded context - NO depende de otros módulos Orion
+
+---
+📊 Próximos Pasos (Phase 5: Testing):
+
+Ahora podríamos:
+
+A) Crear un ejemplo simple para probar manualmente:
+// examples/simple_capture.go
+func main() {
+    cfg := streamcapture.RTSPConfig{
+        URL: "rtsp://192.168.1.100/stream",
+        Resolution: streamcapture.Res720p,
+        TargetFPS: 2.0,
+        SourceStream: "LQ",
+    }
+
+    stream, _ := streamcapture.NewRTSPStream(cfg)
+    frames, _ := stream.Start(context.Background())
+
+    for frame := range frames {
+        fmt.Printf("Frame %d captured\n", frame.Seq)
+    }
+}
+
+B) Hacer commit del código actual:
+git add modules/stream-capture
+git commit -m "feat(stream-capture): implement RTSP stream capture with hot-reload
+
+- Add StreamProvider interface with Start/Stop/Stats/SetTargetFPS
+- Implement GStreamer pipeline with H.264 decode
+- Add exponential backoff reconnection (5 retries)
+- Add 5s warm-up with FPS stability measurement
+- Support hot-reload FPS (~2s interruption)
+- Non-blocking frame distribution (drop policy)
+
+Sprint 1.1 - Phase 1-4 complete

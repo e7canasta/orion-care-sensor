@@ -355,78 +355,31 @@ func (s *RTSPStream) monitorPipeline(ctx context.Context) error {
 		return fmt.Errorf("pipeline not initialized")
 	}
 
-	bus := s.elements.Pipeline.GetPipelineBus()
-
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Debug("stream-capture: context cancelled, stopping pipeline monitor")
-			return nil
-
-		default:
-			// Poll for messages with short timeout for responsive shutdown
-			msg := bus.TimedPop(50 * time.Millisecond)
-			if msg == nil {
-				continue
-			}
-
-			switch msg.Type() {
-			case gst.MessageEOS:
-				slog.Info("stream-capture: end of stream received",
-					"rtsp_url", s.rtspURL,
-					"uptime", time.Since(s.started),
-					"frames_processed", atomic.LoadUint64(&s.frameCount),
-				)
-				return fmt.Errorf("end of stream")
-
-			case gst.MessageError:
-				gerr := msg.ParseError()
-
-				// Classify error for telemetry
-				category := rtsp.ClassifyGStreamerError(gerr)
-
-				// Update error counters (atomic)
-				switch category {
-				case rtsp.ErrCategoryNetwork:
-					atomic.AddUint64(&s.errorsNetwork, 1)
-				case rtsp.ErrCategoryCodec:
-					atomic.AddUint64(&s.errorsCodec, 1)
-				case rtsp.ErrCategoryAuth:
-					atomic.AddUint64(&s.errorsAuth, 1)
-				case rtsp.ErrCategoryUnknown:
-					atomic.AddUint64(&s.errorsUnknown, 1)
-				}
-
-				slog.Error("stream-capture: pipeline error",
-					"error", gerr.Error(),
-					"debug", gerr.DebugString(),
-					"category", category.String(),
-					"rtsp_url", s.rtspURL,
-					"resolution", fmt.Sprintf("%dx%d", s.width, s.height),
-					"uptime", time.Since(s.started),
-					"frames_processed", atomic.LoadUint64(&s.frameCount),
-					"reconnects", atomic.LoadUint32(s.reconnectState.Reconnects),
-				)
-				// Return error to trigger reconnection
-				return fmt.Errorf("pipeline error [%s]: %s", category.String(), gerr.Error())
-
-			case gst.MessageStateChanged:
-				if msg.Source() == s.elements.Pipeline.GetName() {
-					old, new := msg.ParseStateChanged()
-					slog.Debug("stream-capture: pipeline state changed",
-						"from", old,
-						"to", new,
-					)
-
-					// Reset reconnection state when reaching PLAYING state
-					if new == gst.StatePlaying {
-						rtsp.ResetReconnectState(s.reconnectState)
-						slog.Info("stream-capture: pipeline playing, reconnect state reset")
-					}
-				}
-			}
-		}
+	// Prepare error counters
+	errorCounters := &rtsp.ErrorCounters{
+		Network: &s.errorsNetwork,
+		Codec:   &s.errorsCodec,
+		Auth:    &s.errorsAuth,
+		Unknown: &s.errorsUnknown,
 	}
+
+	// Prepare metrics
+	metrics := &rtsp.MonitorMetrics{
+		RTSPURL:        s.rtspURL,
+		Resolution:     fmt.Sprintf("%dx%d", s.width, s.height),
+		FrameCount:     &s.frameCount,
+		ReconnectCount: s.reconnectState.Reconnects,
+		StartedAt:      s.started,
+	}
+
+	// Delegate to monitor module
+	return rtsp.MonitorPipelineBus(
+		ctx,
+		s.elements.Pipeline,
+		errorCounters,
+		s.reconnectState,
+		metrics,
+	)
 }
 
 // Stop gracefully shuts down the stream

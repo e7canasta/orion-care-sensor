@@ -21,6 +21,22 @@ import (
 func CalculateFPSStats(frameTimes []time.Time, totalDuration time.Duration) *WarmupStats {
 	n := len(frameTimes)
 
+	// Handle edge case: no frames
+	if n == 0 {
+		return &WarmupStats{
+			FramesReceived: 0,
+			Duration:       totalDuration,
+			FPSMean:        0,
+			FPSStdDev:      0,
+			FPSMin:         0,
+			FPSMax:         0,
+			IsStable:       false,
+			JitterMean:     0,
+			JitterStdDev:   0,
+			JitterMax:      0,
+		}
+	}
+
 	// Calculate mean FPS (overall rate)
 	fpsMean := float64(n) / totalDuration.Seconds()
 

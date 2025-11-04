@@ -24,6 +24,9 @@ hot_reload
 simple_capture
 hot-reload
 
+bin/
+bin/**
+
 # Captured frames (from test-capture)
 frames/
 captured_frames/

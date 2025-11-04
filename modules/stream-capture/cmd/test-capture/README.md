@@ -78,6 +78,8 @@ RTSP_URL=rtsp://camera/stream MAX_FRAMES=100 make run-test
 | `--fps` | float | `2.0` | Target FPS (0.1-30) |
 | `--source` | string | `test` | Source stream identifier |
 | `--output` | string | *(none)* | Directory to save frames (optional) |
+| `--format` | string | `png` | Output format: `png`, `jpeg` |
+| `--jpeg-quality` | int | `90` | JPEG quality (1-100, only for JPEG) |
 | `--max-frames` | int | `0` | Max frames to capture (0 = unlimited) |
 | `--stats-interval` | int | `10` | Seconds between stats reports |
 | `--debug` | bool | `false` | Enable debug logging |
@@ -116,21 +118,40 @@ Press Ctrl+C to stop gracefully
 ...
 ```
 
-### Example 2: Capture + Save Frames
+### Example 2: Capture + Save Frames (PNG)
 
 ```bash
 ./bin/test-capture \
   --url rtsp://camera/stream \
   --output ./frames \
+  --format png \
   --fps 1.0 \
   --max-frames 50
 ```
 
 **Output**:
 - Console logging (as above)
-- Files saved to `./frames/`:
-  - `frame_000001_20251103_123456.123.rgb`
-  - `frame_000002_20251103_123457.123.rgb`
+- PNG files saved to `./frames/`:
+  - `frame_000001_20251103_123456.123.png` (~960 KB)
+  - `frame_000002_20251103_123457.123.png` (~960 KB)
+  - ...
+
+### Example 2b: Capture + Save Frames (JPEG - smaller)
+
+```bash
+./bin/test-capture \
+  --url rtsp://camera/stream \
+  --output ./frames \
+  --format jpeg \
+  --jpeg-quality 85 \
+  --fps 1.0 \
+  --max-frames 50
+```
+
+**Output**:
+- JPEG files saved to `./frames/`:
+  - `frame_000001_20251103_123456.123.jpeg` (~140 KB)
+  - `frame_000002_20251103_123457.123.jpeg` (~140 KB)
   - ...
 
 ### Example 3: Stats Reporting
@@ -172,33 +193,38 @@ Every 10 seconds (configurable with `--stats-interval`):
 
 ---
 
-## Saved Frame Format
+## Saved Frame Formats
 
-Frames are saved as **raw RGB** files with the following naming convention:
+Frames are saved as **PNG** (lossless) or **JPEG** (compressed) with the following naming convention:
 
 ```
-frame_{sequence:06d}_{timestamp}.rgb
+frame_{sequence:06d}_{timestamp}.{format}
 ```
 
-Example: `frame_000042_20251103_123456.789.rgb`
+Example: `frame_000042_20251103_123456.789.png`
 
-### Frame File Structure
+### Format Comparison
 
-- **Format**: Raw RGB (3 bytes per pixel)
-- **Byte Order**: RGB (Red, Green, Blue)
-- **Size**: `width × height × 3` bytes
-  - 720p (1280×720): ~2.76 MB per frame
-  - 1080p (1920×1080): ~6.22 MB per frame
+| Format | Size (720p) | Size (1080p) | Quality | Use Case |
+|--------|-------------|--------------|---------|----------|
+| **PNG** | ~960 KB | ~2.2 MB | Lossless | Quality inspection, analysis |
+| **JPEG (q=90)** | ~140 KB | ~320 KB | High | General testing |
+| **JPEG (q=85)** | ~140 KB | ~300 KB | High | Storage-efficient |
+| **JPEG (q=70)** | ~100 KB | ~220 KB | Good | Long captures |
 
-### Converting to Standard Image Formats
+### Viewing Frames
+
+Frames are saved in standard image formats and can be viewed with any image viewer:
 
 ```bash
-# Convert RGB to PNG using ImageMagick
-convert -size 1280x720 -depth 8 rgb:frame_000001.rgb frame_000001.png
+# Linux
+xdg-open frame_000001.png
 
-# Convert RGB to JPEG using ffmpeg
-ffmpeg -f rawvideo -pixel_format rgb24 -video_size 1280x720 \
-       -i frame_000001.rgb frame_000001.jpg
+# macOS
+open frame_000001.png
+
+# Command line (ImageMagick)
+display frame_000001.png
 ```
 
 ---

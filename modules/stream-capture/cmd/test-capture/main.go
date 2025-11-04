@@ -4,6 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"log"
 	"log/slog"
 	"os"
@@ -25,6 +28,8 @@ func main() {
 	fps := flag.Float64("fps", 2.0, "Target FPS (0.1-30)")
 	sourceStream := flag.String("source", "test", "Source stream identifier")
 	outputDir := flag.String("output", "", "Directory to save captured frames (optional)")
+	outputFormat := flag.String("format", "png", "Output format: png, jpeg")
+	jpegQuality := flag.Int("jpeg-quality", 90, "JPEG quality (1-100, only for jpeg format)")
 	maxFrames := flag.Int("max-frames", 0, "Maximum frames to capture (0 = unlimited)")
 	statsInterval := flag.Int("stats-interval", 10, "Seconds between stats reports")
 	debug := flag.Bool("debug", false, "Enable debug logging")
@@ -70,12 +75,21 @@ func main() {
 		log.Fatalf("Invalid resolution: %s (must be 512p, 720p, or 1080p)", *resolution)
 	}
 
+	// Validate output format
+	if *outputFormat != "png" && *outputFormat != "jpeg" {
+		log.Fatalf("Invalid output format: %s (must be png or jpeg)", *outputFormat)
+	}
+
 	// Create output directory if specified
 	if *outputDir != "" {
 		if err := os.MkdirAll(*outputDir, 0755); err != nil {
 			log.Fatalf("Failed to create output directory: %v", err)
 		}
-		slog.Info("Frame saving enabled", "directory", *outputDir)
+		slog.Info("Frame saving enabled",
+			"directory", *outputDir,
+			"format", *outputFormat,
+			"jpeg_quality", *jpegQuality,
+		)
 	}
 
 	// Print banner
@@ -123,14 +137,14 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Start stream
-	slog.Info("Starting RTSP stream (warm-up will take ~5 seconds)...")
+	// Start stream (non-blocking, returns immediately)
+	slog.Info("Starting RTSP stream...")
 	frameChan, err := stream.Start(ctx)
 	if err != nil {
 		log.Fatalf("Failed to start stream: %v", err)
 	}
 
-	slog.Info("Stream started successfully, capturing frames...")
+	slog.Info("Stream started successfully, waiting for frames...")
 	fmt.Printf("\n")
 	fmt.Printf("Press Ctrl+C to stop gracefully\n")
 	fmt.Printf("═══════════════════════════════════════════════════════════\n\n")
@@ -203,7 +217,7 @@ func main() {
 
 			// Save frame if output directory specified
 			if *outputDir != "" {
-				if err := saveFrame(*outputDir, frame); err != nil {
+				if err := saveFrame(*outputDir, frame, *outputFormat, *jpegQuality); err != nil {
 					slog.Error("Failed to save frame", "error", err, "seq", frame.Seq)
 					framesDropped++
 				} else {
@@ -250,15 +264,47 @@ shutdown:
 	slog.Info("Test capture completed successfully")
 }
 
-// saveFrame saves a frame to disk as a raw RGB file
-func saveFrame(outputDir string, frame streamcapture.Frame) error {
+// saveFrame saves a frame to disk as PNG or JPEG
+func saveFrame(outputDir string, frame streamcapture.Frame, format string, jpegQuality int) error {
 	// Create filename with timestamp and sequence
-	filename := fmt.Sprintf("frame_%06d_%s.rgb", frame.Seq, frame.Timestamp.Format("20060102_150405.000"))
+	ext := format
+	filename := fmt.Sprintf("frame_%06d_%s.%s", frame.Seq, frame.Timestamp.Format("20060102_150405.000"), ext)
 	filepath := filepath.Join(outputDir, filename)
 
-	// Write frame data
-	if err := os.WriteFile(filepath, frame.Data, 0644); err != nil {
-		return fmt.Errorf("failed to write frame: %w", err)
+	// Convert raw RGB bytes to image.Image
+	img := &image.RGBA{
+		Pix:    make([]uint8, len(frame.Data)+frame.Width*frame.Height), // RGBA needs alpha channel
+		Stride: frame.Width * 4,
+		Rect:   image.Rect(0, 0, frame.Width, frame.Height),
+	}
+
+	// Convert RGB to RGBA (add alpha = 255)
+	for i := 0; i < frame.Width*frame.Height; i++ {
+		img.Pix[i*4+0] = frame.Data[i*3+0] // R
+		img.Pix[i*4+1] = frame.Data[i*3+1] // G
+		img.Pix[i*4+2] = frame.Data[i*3+2] // B
+		img.Pix[i*4+3] = 255                // A (opaque)
+	}
+
+	// Create output file
+	file, err := os.Create(filepath)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer file.Close()
+
+	// Encode based on format
+	switch format {
+	case "png":
+		if err := png.Encode(file, img); err != nil {
+			return fmt.Errorf("failed to encode PNG: %w", err)
+		}
+	case "jpeg":
+		if err := jpeg.Encode(file, img, &jpeg.Options{Quality: jpegQuality}); err != nil {
+			return fmt.Errorf("failed to encode JPEG: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported format: %s", format)
 	}
 
 	return nil

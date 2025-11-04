@@ -33,6 +33,7 @@ help:
 	@echo "  RTSP_URL=rtsp://camera/stream make run-test"
 	@echo "  RTSP_URL=rtsp://camera/stream OUTPUT_DIR=./frames make run-test"
 	@echo "  RTSP_URL=rtsp://camera/stream FPS=1.0 RES=720p make run-test"
+	@echo "  RTSP_URL=rtsp://camera/stream OUTPUT_DIR=./frames FORMAT=jpeg make run-test"
 	@echo ""
 
 # Build targets
@@ -84,6 +85,8 @@ run-test: test-capture
 		--resolution "$(or $(RES),720p)" \
 		--fps "$(or $(FPS),2.0)" \
 		--output "$(OUTPUT_DIR)" \
+		--format "$(or $(FORMAT),png)" \
+		--jpeg-quality "$(or $(JPEG_QUALITY),90)" \
 		--stats-interval "$(or $(STATS_INTERVAL),10)" \
 		$(if $(DEBUG),--debug) \
 		$(if $(MAX_FRAMES),--max-frames $(MAX_FRAMES))

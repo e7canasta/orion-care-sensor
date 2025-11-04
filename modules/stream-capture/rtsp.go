@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/e7canasta/orion-care-sensor/modules/stream-capture/internal/rtsp"
+	"github.com/e7canasta/orion-care-sensor/modules/stream-capture/internal/warmup"
 	"github.com/tinyzimmer/go-gst/gst"
 	"github.com/tinyzimmer/go-gst/gst/app"
 )
@@ -654,74 +655,61 @@ func (s *RTSPStream) Warmup(ctx context.Context, duration time.Duration) (*Warmu
 	}
 	s.mu.RUnlock()
 
-	slog.Info("stream-capture: starting warmup",
-		"duration", duration,
-		"reason", "measure real FPS and verify stability",
-	)
+	// Create adapter channel for warmup helper (converts Frame → warmup.Frame)
+	// This avoids import cycle and allows warmup package to be independent
+	warmupFrames := make(chan warmup.Frame, 10)
 
-	startTime := time.Now()
-	frameTimes := make([]time.Time, 0, 100) // Pre-allocate for ~30 FPS @ 3s
+	// Launch goroutine to convert frames
+	go func() {
+		defer close(warmupFrames)
 
-	// Create timeout context
-	warmupCtx, cancel := context.WithTimeout(ctx, duration)
-	defer cancel()
+		// Create timeout context for adapter goroutine
+		warmupCtx, cancel := context.WithTimeout(ctx, duration+1*time.Second) // +1s buffer
+		defer cancel()
 
-	// Consume frames during warmup
-	for {
-		select {
-		case <-warmupCtx.Done():
-			// Warmup duration elapsed - analyze statistics
-			goto analyze
-
-		case frame, ok := <-s.frames:
-			if !ok {
-				return nil, fmt.Errorf("stream-capture: stream closed during warmup")
+		for {
+			select {
+			case <-warmupCtx.Done():
+				return
+			case frame, ok := <-s.frames:
+				if !ok {
+					return
+				}
+				// Convert streamcapture.Frame → warmup.Frame (minimal subset)
+				warmupFrame := warmup.Frame{
+					Seq:       frame.Seq,
+					Timestamp: frame.Timestamp,
+				}
+				select {
+				case warmupFrames <- warmupFrame:
+					// Sent successfully
+				case <-warmupCtx.Done():
+					return
+				}
 			}
-
-			// Record frame timestamp
-			frameTimes = append(frameTimes, frame.Timestamp)
-
-			slog.Debug("stream-capture: warmup frame received",
-				"seq", frame.Seq,
-				"frames_collected", len(frameTimes),
-			)
 		}
+	}()
+
+	// Delegate to warmup helper (includes fail-fast validation)
+	internalStats, err := warmup.WarmupStream(ctx, warmupFrames, duration)
+	if err != nil {
+		// Wrap error with module prefix
+		return nil, fmt.Errorf("stream-capture: warmup failed: %w", err)
 	}
 
-analyze:
-	elapsed := time.Since(startTime)
-
-	// Validate minimum frames received
-	if len(frameTimes) < 2 {
-		return nil, fmt.Errorf(
-			"stream-capture: not enough frames received during warmup (got %d, need at least 2)",
-			len(frameTimes),
-		)
-	}
-
-	// Calculate FPS statistics (reuse public function to avoid duplication)
-	stats := CalculateFPSStats(frameTimes, elapsed)
-
-	slog.Info("stream-capture: warmup complete",
-		"frames", stats.FramesReceived,
-		"duration", stats.Duration,
-		"fps_mean", fmt.Sprintf("%.2f", stats.FPSMean),
-		"fps_stddev", fmt.Sprintf("%.2f", stats.FPSStdDev),
-		"fps_range", fmt.Sprintf("%.1f-%.1f", stats.FPSMin, stats.FPSMax),
-		"stable", stats.IsStable,
-	)
-
-	// Fail-fast: Warmup MUST verify stream stability before production use
-	// Unstable FPS indicates network issues, camera problems, or pipeline misconfiguration
-	if !stats.IsStable {
-		return nil, fmt.Errorf(
-			"stream-capture: warmup failed - stream FPS unstable (mean=%.2f Hz, stddev=%.2f, threshold=15%%)",
-			stats.FPSMean,
-			stats.FPSStdDev,
-		)
-	}
-
-	return stats, nil
+	// Convert internal stats to public stats (identical structure)
+	return &WarmupStats{
+		FramesReceived: internalStats.FramesReceived,
+		Duration:       internalStats.Duration,
+		FPSMean:        internalStats.FPSMean,
+		FPSStdDev:      internalStats.FPSStdDev,
+		FPSMin:         internalStats.FPSMin,
+		FPSMax:         internalStats.FPSMax,
+		IsStable:       internalStats.IsStable,
+		JitterMean:     internalStats.JitterMean,
+		JitterStdDev:   internalStats.JitterStdDev,
+		JitterMax:      internalStats.JitterMax,
+	}, nil
 }
 
 // checkGStreamerAvailable checks if GStreamer is available

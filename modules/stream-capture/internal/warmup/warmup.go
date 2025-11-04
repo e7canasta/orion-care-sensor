@@ -91,8 +91,8 @@ analyze:
 		)
 	}
 
-	// Calculate FPS statistics
-	stats := calculateFPSStats(frameTimes, elapsed)
+	// Calculate FPS statistics (delegates to public function)
+	stats := calculateFPSStatsInternal(frameTimes, elapsed)
 
 	slog.Info("warmup: stream warm-up complete",
 		"frames", stats.FramesReceived,

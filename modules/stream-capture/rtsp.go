@@ -65,7 +65,7 @@ func NewRTSPStream(cfg RTSPConfig) (*RTSPStream, error) {
 	}
 
 	// Fail-fast validation: Target FPS
-	if cfg.TargetFPS <= 0 || cfg.TargetFPS > 30 {
+	if cfg.TargetFPS < 0.1 || cfg.TargetFPS > 30 {
 		return nil, fmt.Errorf(
 			"stream-capture: invalid FPS %.2f (must be 0.1-30)",
 			cfg.TargetFPS,
@@ -265,9 +265,9 @@ func (s *RTSPStream) Start(ctx context.Context) (<-chan Frame, error) {
 // runPipeline monitors the GStreamer pipeline bus for messages with reconnection
 //
 // This goroutine runs in the background and:
-//   1. Monitors pipeline bus for errors
-//   2. On error: triggers reconnection with exponential backoff
-//   3. On success: resets retry counter and continues
+//  1. Monitors pipeline bus for errors
+//  2. On error: triggers reconnection with exponential backoff
+//  3. On success: resets retry counter and continues
 //
 // Runs until context is cancelled or max retries exceeded.
 func (s *RTSPStream) runPipeline() {
@@ -288,6 +288,10 @@ func (s *RTSPStream) runPipeline() {
 	if err != nil {
 		slog.Error("stream-capture: pipeline stopped after reconnection failure",
 			"error", err,
+			"rtsp_url", s.rtspURL,
+			"resolution", fmt.Sprintf("%dx%d", s.width, s.height),
+			"uptime", time.Since(s.started),
+			"frames_processed", atomic.LoadUint64(&s.frameCount),
 			"reconnects", atomic.LoadUint32(s.reconnectState.Reconnects),
 		)
 	}
@@ -319,7 +323,11 @@ func (s *RTSPStream) monitorPipeline(ctx context.Context) error {
 
 			switch msg.Type() {
 			case gst.MessageEOS:
-				slog.Info("stream-capture: end of stream received")
+				slog.Info("stream-capture: end of stream received",
+					"rtsp_url", s.rtspURL,
+					"uptime", time.Since(s.started),
+					"frames_processed", atomic.LoadUint64(&s.frameCount),
+				)
 				return fmt.Errorf("end of stream")
 
 			case gst.MessageError:
@@ -327,6 +335,11 @@ func (s *RTSPStream) monitorPipeline(ctx context.Context) error {
 				slog.Error("stream-capture: pipeline error",
 					"error", gerr.Error(),
 					"debug", gerr.DebugString(),
+					"rtsp_url", s.rtspURL,
+					"resolution", fmt.Sprintf("%dx%d", s.width, s.height),
+					"uptime", time.Since(s.started),
+					"frames_processed", atomic.LoadUint64(&s.frameCount),
+					"reconnects", atomic.LoadUint32(s.reconnectState.Reconnects),
 				)
 				// Return error to trigger reconnection
 				return fmt.Errorf("pipeline error: %s", gerr.Error())
@@ -486,7 +499,7 @@ func (s *RTSPStream) SetTargetFPS(fps float64) error {
 	defer s.mu.Unlock()
 
 	// Validate FPS range
-	if fps <= 0 || fps > 30 {
+	if fps < 0.1 || fps > 30 {
 		return fmt.Errorf(
 			"stream-capture: invalid FPS %.2f (must be 0.1-30)",
 			fps,
@@ -510,7 +523,10 @@ func (s *RTSPStream) SetTargetFPS(fps float64) error {
 		// Rollback on error
 		slog.Error("stream-capture: failed to update FPS, rolling back",
 			"error", err,
+			"rtsp_url", s.rtspURL,
 			"old_fps", oldFPS,
+			"new_fps", fps,
+			"uptime", time.Since(s.started),
 		)
 		return fmt.Errorf("stream-capture: failed to update FPS: %w", err)
 	}
@@ -539,19 +555,20 @@ func (s *RTSPStream) SetTargetFPS(fps float64) error {
 //   - Context is cancelled
 //
 // Example:
-//   stream, _ := streamcapture.NewRTSPStream(cfg)
-//   frameChan, _ := stream.Start(ctx)
 //
-//   stats, err := stream.Warmup(ctx, 5*time.Second)
-//   if err != nil {
-//       log.Fatal("warmup failed:", err)
-//   }
-//   log.Printf("Stream stable: %v, FPS: %.2f", stats.IsStable, stats.FPSMean)
+//	stream, _ := streamcapture.NewRTSPStream(cfg)
+//	frameChan, _ := stream.Start(ctx)
 //
-//   // Now consume frames normally
-//   for frame := range frameChan {
-//       // Process frame...
-//   }
+//	stats, err := stream.Warmup(ctx, 5*time.Second)
+//	if err != nil {
+//	    log.Fatal("warmup failed:", err)
+//	}
+//	log.Printf("Stream stable: %v, FPS: %.2f", stats.IsStable, stats.FPSMean)
+//
+//	// Now consume frames normally
+//	for frame := range frameChan {
+//	    // Process frame...
+//	}
 func (s *RTSPStream) Warmup(ctx context.Context, duration time.Duration) (*WarmupStats, error) {
 	s.mu.RLock()
 	if s.cancel == nil {
@@ -605,8 +622,8 @@ analyze:
 		)
 	}
 
-	// Calculate FPS statistics (using internal warmup package logic)
-	stats := s.calculateWarmupStats(frameTimes, elapsed)
+	// Calculate FPS statistics (reuse public function to avoid duplication)
+	stats := CalculateFPSStats(frameTimes, elapsed)
 
 	slog.Info("stream-capture: warmup complete",
 		"frames", stats.FramesReceived,
@@ -625,82 +642,6 @@ analyze:
 	}
 
 	return stats, nil
-}
-
-// calculateWarmupStats calculates FPS statistics from frame timestamps
-// This is similar to internal/warmup/stats.go but adapted for public API
-func (s *RTSPStream) calculateWarmupStats(frameTimes []time.Time, totalDuration time.Duration) *WarmupStats {
-	n := len(frameTimes)
-
-	// Calculate mean FPS (overall rate)
-	fpsMean := float64(n) / totalDuration.Seconds()
-
-	// Calculate instantaneous FPS for each interval
-	instantaneousFPS := make([]float64, 0, n-1)
-	for i := 1; i < n; i++ {
-		interval := frameTimes[i].Sub(frameTimes[i-1]).Seconds()
-		if interval > 0 {
-			fps := 1.0 / interval
-			instantaneousFPS = append(instantaneousFPS, fps)
-		}
-	}
-
-	// Handle edge case: no valid intervals
-	if len(instantaneousFPS) == 0 {
-		return &WarmupStats{
-			FramesReceived: n,
-			Duration:       totalDuration,
-			FPSMean:        fpsMean,
-			FPSStdDev:      0,
-			FPSMin:         0,
-			FPSMax:         0,
-			IsStable:       false,
-		}
-	}
-
-	// Find min/max instantaneous FPS
-	fpsMin := instantaneousFPS[0]
-	fpsMax := instantaneousFPS[0]
-	for _, fps := range instantaneousFPS {
-		if fps < fpsMin {
-			fpsMin = fps
-		}
-		if fps > fpsMax {
-			fpsMax = fps
-		}
-	}
-
-	// Calculate standard deviation of instantaneous FPS
-	var sumSquares float64
-	for _, fps := range instantaneousFPS {
-		diff := fps - fpsMean
-		sumSquares += diff * diff
-	}
-	fpsStdDev := 0.0
-	if len(instantaneousFPS) > 0 {
-		fpsStdDev = sumSquares / float64(len(instantaneousFPS))
-		// Calculate square root manually (simple Newton's method)
-		if fpsStdDev > 0 {
-			x := fpsStdDev
-			for i := 0; i < 10; i++ {
-				x = (x + fpsStdDev/x) / 2
-			}
-			fpsStdDev = x
-		}
-	}
-
-	// Determine stability: stddev < 15% of mean
-	isStable := fpsStdDev < (fpsMean * 0.15)
-
-	return &WarmupStats{
-		FramesReceived: n,
-		Duration:       totalDuration,
-		FPSMean:        fpsMean,
-		FPSStdDev:      fpsStdDev,
-		FPSMin:         fpsMin,
-		FPSMax:         fpsMax,
-		IsStable:       isStable,
-	}
 }
 
 // checkGStreamerAvailable checks if GStreamer is available

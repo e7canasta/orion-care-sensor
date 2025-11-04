@@ -28,8 +28,9 @@ type PipelineElements struct {
 // CreatePipeline creates and configures a GStreamer pipeline for RTSP streaming
 //
 // Pipeline structure:
-//   rtspsrc → rtph264depay → avdec_h264 → videoconvert → videoscale →
-//   videorate → capsfilter → appsink
+//
+//	rtspsrc → rtph264depay → avdec_h264 → videoconvert → videoscale →
+//	videorate → capsfilter → appsink
 //
 // The pipeline is configured but NOT started (state remains NULL).
 // Caller must call pipeline.SetState(gst.StatePlaying) to start.
@@ -83,8 +84,8 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create videorate: %w", err)
 	}
-	videorate.SetProperty("drop-only", true)      // Only drop frames, never duplicate
-	videorate.SetProperty("skip-to-first", true)  // Skip to first frame on start
+	videorate.SetProperty("drop-only", true)     // Only drop frames, never duplicate
+	videorate.SetProperty("skip-to-first", true) // Skip to first frame on start
 
 	// Create capsfilter with framerate control
 	capsfilter, err := gst.NewElement("capsfilter")
@@ -102,9 +103,9 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create appsink: %w", err)
 	}
-	appsink.SetProperty("sync", false)       // No sync with clock (real-time)
-	appsink.SetProperty("max-buffers", 1)    // Keep only latest frame
-	appsink.SetProperty("drop", true)        // Drop old frames
+	appsink.SetProperty("sync", false)    // No sync with clock (real-time)
+	appsink.SetProperty("max-buffers", 1) // Keep only latest frame
+	appsink.SetProperty("drop", true)     // Drop old frames
 
 	// Add all elements to pipeline
 	pipeline.AddMany(

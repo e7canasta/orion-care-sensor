@@ -314,7 +314,7 @@ func saveFrame(outputDir string, frame streamcapture.Frame, format string, jpegQ
 		img.Pix[i*4+0] = frame.Data[i*3+0] // R
 		img.Pix[i*4+1] = frame.Data[i*3+1] // G
 		img.Pix[i*4+2] = frame.Data[i*3+2] // B
-		img.Pix[i*4+3] = 255                // A (opaque)
+		img.Pix[i*4+3] = 255               // A (opaque)
 	}
 
 	// Create output file

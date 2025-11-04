@@ -115,19 +115,36 @@ func OnNewSample(sink *app.Sink, ctx *CallbackContext) gst.FlowReturn {
 		return gst.FlowOK
 	}
 
-	// Capture decode latency telemetry (VAAPI performance tracking)
+	// Capture decode latency telemetry (VAAPI/software decode performance tracking)
 	//
-	// Note: GStreamer PTS is relative to pipeline start time, not absolute wall-clock time.
-	// We can't directly measure "camera timestamp → callback arrival" latency without
-	// additional metadata from the camera.
+	// Strategy: GstPadProbe on decoder output captures timestamp when buffer exits decoder.
+	// We retrieve that timestamp from buffer metadata and calculate latency:
+	//   Latency = time.Now() (callback arrival) - decodeExitTime (from probe)
 	//
-	// What we CAN measure here is inter-frame processing time variance, which indirectly
-	// indicates decode performance. For now, we skip this measurement and rely on
-	// overall FPS metrics. Future enhancement: use GStreamer probes on decoder element
-	// to measure decode time directly.
-	//
-	// TODO(future): Add GstPadProbe on decoder output to measure decode-specific latency
-	_ = ctx.DecodeLatencies // Placeholder for future implementation
+	// This measures: decoder output → RGB conversion → videoscale → videorate → appsink
+	// (i.e., post-processing pipeline latency after decode completes)
+	if ctx.DecodeLatencies != nil {
+		// Retrieve decode exit timestamp from buffer metadata
+		timestampCaps := gst.NewCapsFromString("timestamp/x-decode-exit")
+		meta := buffer.GetReferenceTimestampMeta(timestampCaps)
+
+		if meta != nil {
+			decodeExitTime := time.Time{}.Add(meta.Timestamp)
+			callbackArrivalTime := time.Now()
+
+			// Calculate post-decode processing latency
+			latencyMS := float64(callbackArrivalTime.Sub(decodeExitTime).Microseconds()) / 1000.0
+
+			// Update latency window (lock-free via atomic pointer)
+			window := ctx.DecodeLatencies.Load()
+			if window != nil {
+				// Create a new window copy (lock-free update pattern)
+				newWindow := *window
+				newWindow.AddSample(latencyMS)
+				ctx.DecodeLatencies.Store(&newWindow)
+			}
+		}
+	}
 
 	// Map buffer to read data
 	mapInfo := buffer.Map(gst.MapRead)

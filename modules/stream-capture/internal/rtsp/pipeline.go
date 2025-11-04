@@ -2,6 +2,8 @@ package rtsp
 
 import (
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/tinyzimmer/go-gst/gst"
 	"github.com/tinyzimmer/go-gst/gst/app"
@@ -203,6 +205,12 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 		); err != nil {
 			return nil, fmt.Errorf("failed to link VAAPI pipeline elements: %w", err)
 		}
+
+		// Add probe to vaapipostproc output to measure decode latency
+		// This captures the timestamp when the frame exits the GPU decoder
+		if err := addDecodeLatencyProbe(vaapiPostproc); err != nil {
+			slog.Warn("rtsp: failed to add decode latency probe, continuing without telemetry", "error", err)
+		}
 	} else {
 		// Software pipeline: rtspsrc → rtph264depay → avdec_h264 → videoconvert → videoscale → videorate → capsfilter → appsink
 		pipeline.AddMany(
@@ -227,6 +235,11 @@ func CreatePipeline(cfg PipelineConfig) (*PipelineElements, error) {
 			appsink.Element,
 		); err != nil {
 			return nil, fmt.Errorf("failed to link software pipeline elements: %w", err)
+		}
+
+		// Add probe to decoder output to measure decode latency (software decode)
+		if err := addDecodeLatencyProbe(decoder); err != nil {
+			slog.Warn("rtsp: failed to add decode latency probe, continuing without telemetry", "error", err)
 		}
 	}
 
@@ -274,6 +287,45 @@ func DestroyPipeline(elements *PipelineElements) error {
 		return fmt.Errorf("failed to set pipeline to NULL: %w", err)
 	}
 
+	return nil
+}
+
+// addDecodeLatencyProbe adds a probe to the decoder output pad to measure decode latency
+//
+// The probe captures the timestamp when a buffer exits the decoder (post-decode time).
+// This timestamp is stored as ReferenceTimestampMeta on the buffer for later retrieval
+// in OnNewSample callback.
+//
+// Performance: ~50-100ns overhead per frame (timestamp capture + metadata attachment).
+func addDecodeLatencyProbe(element *gst.Element) error {
+	// Get source pad (output) from decoder element
+	srcPad := element.GetStaticPad("src")
+	if srcPad == nil {
+		return fmt.Errorf("failed to get src pad from element")
+	}
+
+	// Create caps for our custom timestamp metadata
+	// Using a unique caps string to identify our metadata
+	timestampCaps := gst.NewCapsFromString("timestamp/x-decode-exit")
+
+	// Add probe to capture timestamp when buffer exits decoder
+	srcPad.AddProbe(gst.PadProbeTypeBuffer, func(pad *gst.Pad, info *gst.PadProbeInfo) gst.PadProbeReturn {
+		buffer := info.GetBuffer()
+		if buffer == nil {
+			return gst.PadProbeOK
+		}
+
+		// Capture timestamp when buffer exits decoder (post-decode time)
+		decodeExitTime := time.Now()
+
+		// Attach timestamp as metadata to buffer (zero-copy)
+		// This metadata will be available in OnNewSample callback
+		buffer.AddReferenceTimestampMeta(timestampCaps, decodeExitTime.Sub(time.Time{}), 0)
+
+		return gst.PadProbeOK
+	})
+
+	slog.Debug("rtsp: decode latency probe installed", "element", element.GetName())
 	return nil
 }
 

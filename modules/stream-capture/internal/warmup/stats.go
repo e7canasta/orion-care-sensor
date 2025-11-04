@@ -5,6 +5,18 @@ import (
 	"time"
 )
 
+const (
+	// fpsStabilityThreshold is the maximum allowed FPS standard deviation as a fraction of mean FPS.
+	// A stream is considered stable if stddev < 15% of mean FPS.
+	// Example: 30 FPS mean → stable if stddev < 4.5 FPS
+	fpsStabilityThreshold = 0.15
+
+	// jitterStabilityThreshold is the maximum allowed mean jitter as a fraction of expected interval.
+	// A stream is considered stable if mean jitter < 20% of expected inter-frame interval.
+	// Example: 30 FPS (33ms interval) → stable if jitter < 6.6ms
+	jitterStabilityThreshold = 0.20
+)
+
 // CalculateFPSStats calculates FPS statistics from frame timestamps
 //
 // This function:
@@ -122,8 +134,8 @@ func CalculateFPSStats(frameTimes []time.Time, totalDuration time.Duration) *War
 	jitterStdDev := math.Sqrt(jitterSumSquares / float64(len(jitters)))
 
 	// Determine stability: stddev < 15% of mean AND jitter < 20% of expected interval
-	fpsStable := fpsStdDev < (fpsMean * 0.15)
-	jitterStable := jitterMean < (expectedInterval * 0.20)
+	fpsStable := fpsStdDev < (fpsMean * fpsStabilityThreshold)
+	jitterStable := jitterMean < (expectedInterval * jitterStabilityThreshold)
 	isStable := fpsStable && jitterStable
 
 	return &WarmupStats{

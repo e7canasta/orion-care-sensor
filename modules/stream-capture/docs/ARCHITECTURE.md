@@ -2,8 +2,8 @@
 
 **Module:** `stream-capture`  
 **Bounded Context:** Stream Acquisition (Orion 2.0)  
-**Version:** 2.0  
-**Last Updated:** 2025-01-04
+**Version:** 2.1  
+**Last Updated:** 2025-01-04 (Post Quick Wins Implementation)
 
 
 
@@ -243,7 +243,14 @@ flowchart TD
 6. **Telemetry** - Error categorization and VAAPI latency tracking
 7. **Reconnection State** - Exponential backoff state machine
 
-**Sources:** [rtsp.go:16-62](../rtsp.go#L16-L62), [internal/rtsp/reconnect.go](../internal/rtsp/reconnect.go)
+**Internal Modules:**
+- `internal/rtsp/pipeline.go` - GStreamer pipeline construction (software/VAAPI variants)
+- `internal/rtsp/callbacks.go` - Frame extraction from GStreamer callbacks
+- `internal/rtsp/monitor.go` - Bus monitoring and error telemetry (NEW in v2.1)
+- `internal/rtsp/reconnect.go` - Exponential backoff state machine
+- `internal/rtsp/errors.go` - Error classification (Network/Codec/Auth/Unknown)
+
+**Sources:** [rtsp.go:16-62](../rtsp.go#L16-L62), [internal/rtsp/](../internal/rtsp/)
 
 ### 3.2 GStreamer Pipeline
 
@@ -452,15 +459,100 @@ stateDiagram-v2
 
 ## 4. Warmup & FPS Stability
 
-TODO: Document warmup algorithm and stability criteria
+### 4.1 Warmup Algorithm
 
-**Placeholder sections:**
-- Warmup algorithm pseudocode
-- Stability criteria table (FPS stddev < 15%, jitter < 20%)
-- Fail-fast pattern rationale
-- Jitter calculation (inter-frame interval variance)
+The `Warmup()` method validates stream stability before production use. It consumes frames for a specified duration (typically 5 seconds) and calculates FPS statistics.
 
-**Sources:** [warmup_stats.go](../warmup_stats.go), [internal/warmup/warmup.go](../internal/warmup/warmup.go)
+**Algorithm Pseudocode:**
+
+```
+Warmup(ctx, duration):
+  1. Start frame collection timer
+  2. Collect frame timestamps for 'duration'
+  3. Calculate statistics:
+     - FPS mean (total frames / duration)
+     - FPS stddev (instantaneous FPS variance)
+     - FPS min/max (instantaneous FPS bounds)
+     - Jitter mean (inter-frame interval variance)
+     - Jitter stddev (jitter variance)
+  4. Check stability criteria:
+     - fpsStable = (stddev < mean × 0.15)  // 15% threshold
+     - jitterStable = (jitterMean < expectedInterval × 0.20)  // 20% threshold
+     - isStable = fpsStable AND jitterStable
+  5. Return WarmupStats + error if unstable
+```
+
+**Implementation:** [warmup_stats.go:21-137](../warmup_stats.go)
+
+### 4.2 Stability Criteria
+
+| Metric | Threshold | Rationale |
+|--------|-----------|-----------|
+| **FPS StdDev** | < 15% of mean | Detects frame rate inconsistency |
+| **Jitter Mean** | < 20% of expected interval | Detects timing variance |
+| **Min Frames** | >= 2 | Need data for variance calculation |
+
+**Example (Stable Stream):**
+```
+FPS Mean: 1.00 Hz
+FPS StdDev: 0.05 Hz (5% of mean) → ✅ Stable
+Jitter Mean: 0.02s (2% of 1s interval) → ✅ Stable
+IsStable: true
+```
+
+**Example (Unstable Stream):**
+```
+FPS Mean: 1.00 Hz
+FPS StdDev: 0.20 Hz (20% of mean) → ❌ Unstable
+Jitter Mean: 0.05s (5% of 1s interval) → ✅ Stable
+IsStable: false (FPS variance too high)
+```
+
+### 4.3 Jitter Calculation
+
+**Jitter** = Absolute deviation from expected inter-frame interval
+
+```go
+expectedInterval := 1.0 / fpsMean  // e.g., 1.0s for 1 Hz
+for i := 1; i < len(frameTimes); i++ {
+    actualInterval := frameTimes[i].Sub(frameTimes[i-1]).Seconds()
+    jitter := math.Abs(actualInterval - expectedInterval)
+    jitters = append(jitters, jitter)
+}
+jitterMean := sum(jitters) / len(jitters)
+```
+
+**Interpretation:**
+- Low jitter (<< 20%) = Smooth, predictable frame arrival
+- High jitter (> 20%) = Bursty, unreliable stream (network issues, camera problems)
+
+### 4.4 Fail-Fast Pattern
+
+The `Warmup()` method **returns an error** if the stream is unstable. This is intentional design:
+
+**Rationale:**
+- **Production safety**: Prevents deployment on unreliable streams
+- **Early detection**: Catch issues at startup (not after hours of operation)
+- **Clear signal**: Error = actionable problem (fix camera config, network, etc.)
+
+**Usage:**
+```go
+stats, err := stream.Warmup(ctx, 5*time.Second)
+if err != nil {
+    log.Fatal("Stream unstable:", err)  // DO NOT proceed
+}
+log.Printf("✅ Stream stable - FPS: %.2f Hz", stats.FPSMean)
+```
+
+**Property Tests:** [warmup_stats_test.go](../warmup_stats_test.go) validates 6 invariants:
+1. Stability criteria (thresholds)
+2. Monotonic relationship (↑ jitter → ↓ stability)
+3. Edge cases (0, 1, 2 frames)
+4. Jitter bounds (always >= 0)
+5. FPS bounds (min <= mean <= max)
+6. Duration consistency
+
+**Sources:** [warmup_stats.go](../warmup_stats.go), [warmup_stats_test.go](../warmup_stats_test.go)
 
 ---
 
@@ -738,16 +830,21 @@ TODO: Document error classification and remediation
 
 **Related Documentation:**
 - [CLAUDE.md](../CLAUDE.md) - AI companion guide with quick start, troubleshooting, and development workflow
-- [README.md](../README.md) - Human-friendly module overview (TODO)
+- [C4_MODEL.md](C4_MODEL.md) - C4 architecture diagrams (Context, Container, Component, Code)
+- [adr/](adr/) - Architecture Decision Records (formal ADRs)
+- [TECHNICAL_REVIEW_2025-01-04.md](2025-11-04%20TECHNICAL_REVIEW_2025-01-04.md) - Design review analysis (9.2/10 score)
+- [QUICK_WINS_SUMMARY.md](2025-11-04%20QUICK_WINS_SUMMARY.md) - Implementation summary (v2.1 improvements)
 - Parent repository: [OrionWork/VAULT/arquitecture/ARCHITECTURE.md](../../../VAULT/arquitecture/ARCHITECTURE.md) - Orion 2.0 system architecture
 
 **Source Files:**
 - [provider.go](../provider.go) - StreamProvider interface definition
-- [rtsp.go](../rtsp.go) - RTSPStream implementation
+- [rtsp.go](../rtsp.go) - RTSPStream implementation (774 lines, orchestration)
 - [types.go](../types.go) - Type definitions (Frame, StreamStats, RTSPConfig)
 - [warmup_stats.go](../warmup_stats.go) - Warmup statistics implementation
+- [warmup_stats_test.go](../warmup_stats_test.go) - Property-based tests (6 invariants)
 - [internal/rtsp/pipeline.go](../internal/rtsp/pipeline.go) - GStreamer pipeline construction
 - [internal/rtsp/callbacks.go](../internal/rtsp/callbacks.go) - GStreamer callback handlers
+- [internal/rtsp/monitor.go](../internal/rtsp/monitor.go) - Bus monitoring (NEW in v2.1)
 - [internal/rtsp/reconnect.go](../internal/rtsp/reconnect.go) - Reconnection state machine
 - [internal/rtsp/errors.go](../internal/rtsp/errors.go) - Error categorization
 
@@ -770,12 +867,30 @@ TODO: Document error classification and remediation
 
 ---
 
-**Document Status:** 🚧 DRAFT - Skeleton complete, TODO sections need implementation  
-**Next Steps:**
-1. Fill section 3.3 (Callback Lifecycle)
-2. Fill section 4 (Warmup & FPS Stability)
-3. Fill section 5 (Hardware Acceleration)
-4. Fill section 8 (Statistics & Telemetry)
-5. Fill section 9 (Error Categorization)
-6. Add code examples to sections 3.2-3.4
-7. Cross-validate all source references against actual code
+**Document Status:** ✅ STABLE (v2.1) - Core sections complete, advanced sections in CLAUDE.md  
+
+**Completed Sections:**
+- ✅ Module Overview (section 1)
+- ✅ StreamProvider Interface (section 2)
+- ✅ RTSPStream Architecture (section 3.1, 3.2, 3.4)
+- ✅ Warmup & FPS Stability (section 4) - NEW in v2.1
+- ✅ Reconnection Logic (section 6)
+- ✅ Frame Channel Buffering (section 7)
+- ✅ Design Decisions (section 10) - 6 ADRs
+
+**Advanced Topics (see CLAUDE.md):**
+- Section 3.3: Callback Lifecycle (detailed in CLAUDE.md lines 436-500)
+- Section 5: Hardware Acceleration (detailed in CLAUDE.md lines 373-434)
+- Section 8: Statistics & Telemetry (detailed in CLAUDE.md lines 611-720)
+- Section 9: Error Categorization (detailed in CLAUDE.md lines 502-610)
+
+**Change Log (v2.1 - 2025-01-04):**
+- Added section 4: Warmup & FPS Stability (algorithm + property tests)
+- Added `internal/rtsp/monitor.go` to component structure
+- Updated Appendix A with new source files (monitor.go, warmup_stats_test.go)
+- Added cross-references to ADR directory and technical review docs
+- Status changed from DRAFT → STABLE
+
+---
+
+**Co-authored-by:** Gaby de Visiona <noreply@visiona.app>

@@ -6,8 +6,8 @@ This document describes the architecture of the `stream-capture` module using th
 
 **Purpose**: Provide visual architecture reference for future Claude Code sessions and development team.
 
-**Last Updated**: 2025-11-04
-**Revision**: 1.0
+**Last Updated**: 2025-01-04 (Post Quick Wins - v2.1)
+**Revision**: 2.0
 
 ---
 
@@ -219,12 +219,13 @@ graph TB
 | Component | Responsibility | Thread-Safety | Key Files |
 |-----------|---------------|---------------|-----------|
 | **StreamProvider** | Public API contract | Interface (no state) | provider.go:17-124 |
-| **RTSPStream** | Lifecycle orchestration | RWMutex + atomics | rtsp.go:16-822 |
+| **RTSPStream** | Lifecycle orchestration | RWMutex + atomics | rtsp.go:16-774 (v2.1) |
 | **Pipeline** | GStreamer pipeline creation | Stateless (called from Start) | internal/rtsp/pipeline.go |
 | **Callbacks** | Frame extraction from GStreamer | Lock-free (atomic counters) | internal/rtsp/callbacks.go |
+| **Monitor** | Bus monitoring & telemetry (NEW v2.1) | Context-based polling | internal/rtsp/monitor.go |
 | **Reconnect** | Exponential backoff retry | Context-based cancellation | internal/rtsp/reconnect.go |
 | **Errors** | GStreamer error classification | Stateless (pure function) | internal/rtsp/errors.go |
-| **WarmupStream** | FPS stability validation | Consumes from channel | internal/warmup/warmup.go |
+| **WarmupStream** | FPS stability validation | Consumes from channel | warmup_stats.go |
 | **Frame Channel** | Non-blocking frame delivery | Go channel (buffered 10) | rtsp.go:126 |
 
 ---
@@ -480,13 +481,16 @@ graph LR
 - Prevents production use of unreliable streams
 - Forces operator to fix network/camera issues before deployment
 - Clear signal: "This stream is not production-ready"
+- **Property-tested**: 6 invariants validated (NEW in v2.1)
 
 **Stability Criteria**:
 - FPS standard deviation < 15% of mean
 - Jitter mean < 20% of expected interval
 - Minimum 2 frames received
 
-**Code**: rtsp.go:763-769 (fail-fast error return)
+**Testing** (NEW v2.1): warmup_stats_test.go (6 property tests)
+
+**Code**: warmup_stats.go:21-137 (algorithm), warmup_stats_test.go (tests)
 
 ---
 
@@ -579,6 +583,47 @@ graph LR
 
 ---
 
+### AD-9: Bus Monitoring Extraction (v2.1)
+
+**Decision**: Extract GStreamer bus monitoring to `internal/rtsp/monitor.go`.
+
+**Rationale**:
+- **Separation of concerns**: Orchestration (rtsp.go) vs event handling (monitor.go)
+- **Testability**: Bus monitoring can be tested in isolation
+- **Cohesion**: One module = one responsibility (SRP)
+- **Code size**: rtsp.go reduced from 821 → 774 lines (-5.7%)
+
+**Trade-offs**:
+- ✅ Better testability (can mock GStreamer pipeline)
+- ✅ Clear module boundaries
+- ❌ One extra file (acceptable for cohesion gain)
+
+**Code**: internal/rtsp/monitor.go (130 lines, new in v2.1)
+
+---
+
+### AD-10: Property-Based Testing (v2.1)
+
+**Decision**: Use property-based testing for warmup stability algorithm.
+
+**Rationale**:
+- **Invariant validation**: Tests document mathematical properties
+- **Edge case coverage**: Automatically tests boundary conditions
+- **Regression prevention**: Algorithm changes validated against 6 invariants
+- **Zero mocks**: Pure function testing (no GStreamer dependencies)
+
+**Properties Tested**:
+1. Stability thresholds (FPS stddev < 15%, jitter < 20%)
+2. Monotonic relationship (↑ jitter → ↓ stability)
+3. Edge cases (0, 1, 2 frames)
+4. Jitter bounds (always >= 0, max >= mean)
+5. FPS bounds (min <= mean <= max)
+6. Duration consistency
+
+**Code**: warmup_stats_test.go (330 lines, 6 properties + benchmark)
+
+---
+
 ## Diagram Legend
 
 ### C1 (Context) Colors:
@@ -612,11 +657,25 @@ graph LR
 ## References
 
 - **CLAUDE.md**: Module documentation for AI companion
-- **ARCHITECTURE.md**: Orion 2.0 global architecture (4+1 views)
+- **ARCHITECTURE.md**: Technical reference documentation (sections 1-10)
+- **adr/**: Architecture Decision Records (formal ADRs)
+  - [ADR-001: TCP-Only Transport](adr/001-tcp-only-transport.md)
+- **TECHNICAL_REVIEW_2025-01-04.md**: Design review analysis (9.2/10 → 9.7/10)
+- **QUICK_WINS_SUMMARY.md**: v2.1 improvements summary
 - **Code**: modules/stream-capture/*.go
 - **C4 Model**: https://c4model.com/
 
 ---
 
-**Maintained by**: Orion Architecture Team
+**Change Log (v2.1 - 2025-01-04)**:
+- Added AD-9: Bus Monitoring Extraction (monitor.go)
+- Added AD-10: Property-Based Testing (warmup_stats_test.go)
+- Updated C3 diagram to include Monitor component
+- Added cross-references to ADR directory and technical review docs
+
+---
+
+**Maintained by**: Orion Architecture Team  
 **For questions**: See CLAUDE.md or contact team lead
+
+**Co-authored-by:** Gaby de Visiona <noreply@visiona.app>

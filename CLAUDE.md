@@ -442,3 +442,81 @@ Each module includes:
 - **Milestones**: v1.5 (2025-01-31), v2.0 (2025-03-31), v3.0 (2025-06-30)
 
 Backlog markdown files are source of truth, synced with GitHub issues.
+
+
+
+ ---  
+ 
+### 🎯 Matriz de Complementariedad  
+  
+| Aspecto       | ARCHITECTURE.md (781 líneas)        | C4_MODEL.md (622 líneas)                 | Overlap  | Verdict             |     |
+| ------------- | ----------------------------------- | ---------------------------------------- | -------- | ------------------- | --- |
+| Audiencia     | Desarrolladores expertos            | Claude Code + Team onboarding            | 20%      | ✅ Complementario    |     |
+| Propósito     | Referencia técnica enciclopédica    | Vistas arquitectónicas visuales          | 30%      | ✅ Complementario    |     |
+| Estilo        | Deep dive (state machines, tables)  | High-level overview (C1→C4 progression)  | 0%       | ✅ Complementario    |     |
+| Diagramas     | Estructurales (component diagrams)  | Contextuales (ecosystem, containers)     | 40%      | ⚠ Algo de overlap   |     |
+| Code examples | Pseudocódigo + Go snippets          | Sequence diagrams + class diagrams       | 10%      | ✅ Complementario    |     |
+  
+ ---  
+
+### 🔍 Análisis Detallado  
+  
+ Contenido ÚNICO en C4_MODEL.md (622 líneas)  
+  
+ Valor diferencial: Visión macro → micro progresiva  
+  
+ 1. ✅ C1: System Context (Líneas 24-74)  
+   - Stream-capture en ecosistema Orion 2.0  
+   - Interacciones con Camera, MQTT, Worker Lifecycle  
+   - NO está en ARCHITECTURE.md → Agrega contexto crítico  
+ 2. ✅ C2: Container Diagram (Líneas 76-140)  
+   - Technology stack visual (Go → GStreamer → VAAPI → Kernel)  
+   - CGo boundaries  
+   - Parcialmente en ARCH (sección 3.2 tiene pipeline, pero no tech stack completo)  
+ 3. ✅ Thread Safety Model (Código, Líneas 452-481)  
+   - 3 goroutines + atomic operations  
+   - Diagrama visual de concurrency  
+   - NO está en ARCHITECTURE.md → Crítico para entender race conditions  
+ 4. ✅ Sequence Diagrams (Líneas 303-383)  
+   - Lifecycle completo: New → Start → Warmup → SetTargetFPS → Stop  
+   - Formato diferente a ARCH (state machines vs sequences)  
+ 5. ✅ 8 ADRs completos con rationale (Líneas 485-622)  
+   - ARCHITECTURE.md tiene 6 ADRs (AD-1 a AD-6)  
+   - C4 tiene 8 ADRs más detallados (trade-offs, code refs)  
+  
+ ---  
+### Contenido ÚNICO en ARCHITECTURE.md (781 líneas)  
+  
+ Valor diferencial: Deep dive técnico  
+  
+ 1. ✅ Pipeline Element Configuration Table (Líneas 347-366)  
+   - 12 elementos con todas las properties  
+   - Ejemplo: rtspsrc.latency=200ms, appsink.max-buffers=1  
+   - NO está en C4 → Referencia operacional crítica  
+ 2. ✅ Implementation Comparison Table (Líneas 154-165)  
+   - RTSPStream vs MockStream (7 features)  
+   - NO está en C4 → Útil para testing decisions  
+ 3. ✅ Hot-Reload State Machine (Líneas 403-450)  
+   - Mermaid state diagram detallado  
+   - C4 tiene sequence diagram (diferente view del mismo proceso)  
+   - Complementario (state vs sequence)  
+ 4. ✅ Frame Channel Buffering Rationale (Líneas 549-583)  
+   - Explicación profunda del non-blocking pattern  
+   - C4 tiene versión resumida en AD-1 → ARCH es más exhaustivo  
+ 5. 🚧 Secciones TODO (Líneas 453-610)  
+   - Warmup algorithm pseudocode  
+   - VAAPI acceleration details  
+   - Statistics & Telemetry  
+   - Error Categorization  
+   - C4 tiene esto completo → Oportunidad de sync  
+  
+ ---  
+### 🎸 Overlap Identificado (~30-40%)  
+  
+ Coexntenido duplicado pero con enfoques diferentes:  
+  
+| Sección             | ARCHITECTURE.md                      | C4_MODEL.md                 | Tipo Overlap                                        |     |
+| ------------------- | ------------------------------------ | --------------------------- | --------------------------------------------------- | --- |
+| GStreamer Pipeline  | Mermaid flowcharts (Software/VAAPI)  | Mermaid graph (C2) + table  | ⚠ Duplicación visual (OK - diferentes niveles)      |     |
+| Reconnection Logic  | State machine (Líneas 481-546)       | AD-5 + tabla (C4)           | ⚠ Duplicación moderada (OK - diferentes formatos)   |     |
+| Design Decisions    | 6 ADRs (AD-1 a AD-6)                 | 8 ADRs (más detallados)     | ⚠ C4 es superset → Merge?                           |     |

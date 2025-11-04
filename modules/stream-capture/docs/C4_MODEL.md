@@ -28,25 +28,25 @@ This document describes the architecture of the `stream-capture` module using th
 ```mermaid
 graph TB
     subgraph "External Systems"
-        Camera[RTSP Camera<br/>H.264 Stream<br/>1-30 fps]
-        MQTTBroker[MQTT Broker<br/>Control Plane<br/>Mosquitto]
+        Camera[RTSP Camera, H.264 Stream, 1-30 fps]
+        MQTTBroker[MQTT Broker, Control Plane, Mosquitto]
     end
 
     subgraph "Orion 2.0 System"
-        StreamCapture[Stream Capture Module<br/>Bounded Context<br/>RTSP Acquisition]
-        WorkerLifecycle[Worker Lifecycle Module<br/>Inference Orchestration<br/>Python Workers]
-        ControlPlane[Control Plane Module<br/>Hot-Reload Commands<br/>MQTT Handler]
+        StreamCapture[Stream Capture Module, Bounded Context, RTSP Acquisition]
+        WorkerLifecycle[Worker Lifecycle Module, Inference Orchestration, Python Workers]
+        ControlPlane[Control Plane Module, Hot-Reload Commands, MQTT Handler]
     end
 
     subgraph "Infrastructure"
-        GStreamer[GStreamer 1.0+<br/>Multimedia Framework<br/>VAAPI Support]
-        VAAPI[Intel VAAPI<br/>Hardware Decode<br/>Quick Sync]
+        GStreamer[GStreamer 1.0+, Multimedia Framework, VAAPI Support]
+        VAAPI[Intel VAAPI, Hardware Decode, Quick Sync]
     end
 
-    Camera -->|RTSP/TCP<br/>H.264 stream| StreamCapture
-    StreamCapture -->|Frame Channel<br/>RGB bytes| WorkerLifecycle
-    MQTTBroker -->|Control Commands<br/>set_fps, pause| ControlPlane
-    ControlPlane -->|Hot-Reload<br/>SetTargetFPS()| StreamCapture
+    Camera -->|RTSP/TCP, H.264 stream| StreamCapture
+    StreamCapture -->|Frame Channel, RGB bytes| WorkerLifecycle
+    MQTTBroker -->|Control Commands, set_fps, pause| ControlPlane
+    ControlPlane -->|Hot-Reload, SetTargetFPS| StreamCapture
     StreamCapture -.->|Uses| GStreamer
     GStreamer -.->|Hardware Accel| VAAPI
 
@@ -58,6 +58,8 @@ graph TB
     class StreamCapture,WorkerLifecycle,ControlPlane orion
     class GStreamer,VAAPI infra
 ```
+# End of Selection
+
 
 **Key Interactions**:
 - **RTSP Camera → Stream-Capture**: TCP-only H.264 stream (protocols=4)
@@ -79,33 +81,33 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "Stream-Capture Module (Go 1.21+)"
+    subgraph "Stream-Capture Module Go 1.21+"
         subgraph "Public API"
-            StreamProvider[StreamProvider Interface<br/>Start, Stop, Stats<br/>SetTargetFPS, Warmup]
+            StreamProvider[StreamProvider Interface: Start, Stop, Stats, SetTargetFPS, Warmup]
         end
 
         subgraph "Implementation"
-            RTSPStream[RTSPStream Struct<br/>GStreamer Pipeline<br/>Lifecycle Management]
-            InternalPackages[Internal Packages<br/>rtsp, warmup]
+            RTSPStream[RTSPStream Struct: GStreamer Pipeline, Lifecycle Management]
+            InternalPackages[Internal Packages: rtsp, warmup]
         end
 
         subgraph "Dependencies"
-            GoGst[go-gst Library<br/>github.com/tinyzimmer/go-gst<br/>CGo Bindings]
-            UUID[UUID Library<br/>github.com/google/uuid<br/>TraceID Generation]
+            GoGst[go-gst Library: github.com/tinyzimmer/go-gst, CGo Bindings]
+            UUID[UUID Library: github.com/google/uuid, TraceID Generation]
         end
     end
 
-    subgraph "GStreamer Runtime (C/C++)"
-        Pipeline[GStreamer Pipeline<br/>rtspsrc → decoder → appsink<br/>VAAPI or Software]
-        Plugins[GStreamer Plugins<br/>rtsp, h264, vaapi, base]
+    subgraph "GStreamer Runtime C/C++"
+        Pipeline[GStreamer Pipeline: rtspsrc → decoder → appsink, VAAPI or Software]
+        Plugins[GStreamer Plugins: rtsp, h264, vaapi, base]
     end
 
     subgraph "System Libraries"
-        VAAPI2[VAAPI Driver<br/>libva, i965/iHD<br/>Intel Quick Sync]
-        Kernel[Linux Kernel<br/>DRM/KMS<br/>Hardware Access]
+        VAAPI2[VAAPI Driver: libva, i965/iHD, Intel Quick Sync]
+        Kernel[Linux Kernel: DRM/KMS, Hardware Access]
     end
 
-    Consumer[Consumer Goroutine<br/>Frame Processing<br/>Inference Workers] -->|frameChan<br/>RGB bytes| StreamProvider
+    Consumer[Consumer Goroutine: Frame Processing, Inference Workers] -->|frameChan, RGB bytes| StreamProvider
     StreamProvider --> RTSPStream
     RTSPStream --> InternalPackages
     RTSPStream --> GoGst
@@ -125,6 +127,7 @@ graph TB
     class VAAPI2,Kernel system
     class StreamProvider api
 ```
+
 
 **Technology Stack**:
 - **Go 1.21+**: Main language (concurrency, orchestration)
@@ -146,37 +149,37 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "Public Interface (provider.go)"
-        StreamProvider[StreamProvider Interface<br/>5 methods: Start, Stop,<br/>Stats, SetTargetFPS, Warmup]
+    subgraph "Public Interface [provider.go]"
+        StreamProvider[StreamProvider Interface - 5 methods: Start, Stop, Stats, SetTargetFPS, Warmup]
     end
 
-    subgraph "Core Implementation (rtsp.go)"
-        RTSPStream[RTSPStream Struct<br/>- Pipeline state<br/>- Atomic counters<br/>- Reconnection state]
-        Start[Start Method<br/>- Create pipeline<br/>- Launch goroutines<br/>- Non-blocking return]
-        Stop[Stop Method<br/>- Cancel context<br/>- Wait goroutines (3s)<br/>- Double-close protection]
-        Stats[Stats Method<br/>- Atomic loads<br/>- Thread-safe<br/>- Calculate rates]
-        SetFPS[SetTargetFPS Method<br/>- Update capsfilter<br/>- Rollback on failure<br/>- 5s timeout]
-        Warmup[Warmup Method<br/>- Consume frames (5s)<br/>- Calculate FPS/jitter<br/>- Fail-fast if unstable]
+    subgraph "Core Implementation [rtsp.go]"
+        RTSPStream[RTSPStream Struct - Pipeline state, Atomic counters, Reconnection state]
+        Start[Start Method - Create pipeline, Launch goroutines, Non-blocking return]
+        Stop[Stop Method - Cancel context, Wait goroutines 3s, Double-close protection]
+        Stats[Stats Method - Atomic loads, Thread-safe, Calculate rates]
+        SetFPS[SetTargetFPS Method - Update capsfilter, Rollback on failure, 5s timeout]
+        Warmup[Warmup Method - Consume frames 5s, Calculate FPS/jitter, Fail-fast if unstable]
     end
 
     subgraph "internal/rtsp Package"
-        Pipeline[pipeline.go<br/>CreatePipeline()<br/>- VAAPI vs Software<br/>- Optimization Levels]
-        Callbacks[callbacks.go<br/>OnNewSample()<br/>- Frame extraction<br/>- Latency telemetry]
-        Reconnect[reconnect.go<br/>RunWithReconnect()<br/>- Exponential backoff<br/>- Max 5 retries]
-        Errors[errors.go<br/>ClassifyGStreamerError()<br/>- 4 categories<br/>- Regex patterns]
+        Pipeline[pipeline.go - CreatePipeline, VAAPI vs Software, Optimization Levels]
+        Callbacks[callbacks.go - OnNewSample, Frame extraction, Latency telemetry]
+        Reconnect[reconnect.go - RunWithReconnect, Exponential backoff, Max 5 retries]
+        Errors[errors.go - ClassifyGStreamerError, 4 categories, Regex patterns]
     end
 
     subgraph "internal/warmup Package"
-        WarmupStream[warmup.go<br/>WarmupStream()<br/>- FPS statistics<br/>- Jitter calculation]
-        StatsCalc[stats_internal.go<br/>calculateFPSStatsInternal()<br/>- Mean, stddev, P95<br/>- Stability criteria]
+        WarmupStream[warmup.go - WarmupStream, FPS statistics, Jitter calculation]
+        StatsCalc[stats_internal.go - calculateFPSStatsInternal, Mean, stddev, P95, Stability criteria]
     end
 
     subgraph "Frame Flow"
-        FrameChan[Frame Channel<br/>buffered(10)<br/>Non-blocking drops]
-        FrameBus[Frame Distribution<br/>- Fan-out pattern<br/>- Drop telemetry]
+        FrameChan[Frame Channel - buffered 10, Non-blocking drops]
+        FrameBus[Frame Distribution - Fan-out pattern, Drop telemetry]
     end
 
-    Consumer[Consumer<br/>Worker Lifecycle] -->|Read| StreamProvider
+    Consumer[Consumer - Worker Lifecycle] -->|Read| StreamProvider
     StreamProvider --> RTSPStream
     RTSPStream --> Start
     RTSPStream --> Stop
@@ -208,6 +211,8 @@ graph TB
     class Pipeline,Callbacks,Reconnect,Errors,WarmupStream,StatsCalc internal
     class FrameChan,FrameBus flow
 ```
+# End of Selection
+
 
 **Component Responsibilities**:
 

@@ -5,6 +5,7 @@
 package bus
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,21 @@ type Frame struct {
 
 	// Metadata contains optional key-value pairs
 	Metadata map[string]string
+
+	// Ctx is an optional context for tracing, cancellation, and deadlines.
+	// If nil, the frame has no associated context (backward compatible).
+	//
+	// Use cases:
+	//   - Distributed tracing (OpenTelemetry trace ID propagation)
+	//   - Request cancellation (cancel in-flight processing)
+	//   - Deadline propagation (frame expiration time)
+	//
+	// Example:
+	//   ctx, span := tracer.Start(context.Background(), "frame-publish")
+	//   frame.Ctx = ctx
+	//   bus.Publish(frame)
+	//   defer span.End()
+	Ctx context.Context
 }
 
 // BusStats contains global and per-subscriber metrics.
@@ -50,6 +66,25 @@ type SubscriberStats struct {
 	Dropped uint64
 }
 
+// SubscriberHealth represents the health state of a subscriber based on drop rate.
+type SubscriberHealth string
+
+const (
+	// HealthHealthy indicates normal operation with low drop rate (< 50%).
+	HealthHealthy SubscriberHealth = "healthy"
+
+	// HealthDegraded indicates elevated drop rate (50-90%).
+	// Subscriber is falling behind but still processing some frames.
+	HealthDegraded SubscriberHealth = "degraded"
+
+	// HealthSaturated indicates critical drop rate (> 90%).
+	// Subscriber is severely overloaded and requires intervention.
+	HealthSaturated SubscriberHealth = "saturated"
+
+	// HealthUnknown is returned for subscribers with no activity yet.
+	HealthUnknown SubscriberHealth = "unknown"
+)
+
 var (
 	// ErrSubscriberExists is returned when Subscribe is called with a duplicate id.
 	ErrSubscriberExists = errors.New("subscriber id already exists")
@@ -74,10 +109,59 @@ type Bus interface {
 	// Publish sends frame to all subscribers (non-blocking).
 	// Drops frame for subscribers whose channels are full.
 	// Panics if bus is closed.
+	//
+	// Note: frame.Ctx is ignored by Publish. Use PublishWithContext
+	// if you need to set a context for the frame.
 	Publish(frame Frame)
+
+	// PublishWithContext sends frame with context to all subscribers (non-blocking).
+	// The context is stored in frame.Ctx for downstream tracing/cancellation.
+	// Drops frame for subscribers whose channels are full.
+	// Panics if bus is closed.
+	//
+	// Use cases:
+	//   - Distributed tracing: Propagate trace ID through the pipeline
+	//   - Cancellation: Signal downstream workers to abort processing
+	//   - Deadlines: Expire stale frames based on context deadline
+	//
+	// Example:
+	//   ctx, span := tracer.Start(context.Background(), "frame-publish")
+	//   bus.PublishWithContext(ctx, frame)
+	//   defer span.End()
+	PublishWithContext(ctx context.Context, frame Frame)
 
 	// Stats returns current bus statistics snapshot.
 	Stats() BusStats
+
+	// GetHealth returns the health state of a subscriber based on drop rate.
+	//
+	// Health states:
+	//   - HealthHealthy:   Drop rate < 50% (normal operation)
+	//   - HealthDegraded:  Drop rate 50-90% (falling behind)
+	//   - HealthSaturated: Drop rate > 90% (critical overload)
+	//   - HealthUnknown:   No activity yet (sent + dropped == 0)
+	//
+	// Returns HealthUnknown if subscriber ID not found.
+	//
+	// Example:
+	//   health := bus.GetHealth("worker-1")
+	//   if health == HealthSaturated {
+	//       log.Error("worker-1 is saturated, restarting...")
+	//       restartWorker("worker-1")
+	//   }
+	GetHealth(id string) SubscriberHealth
+
+	// GetUnhealthySubscribers returns IDs of all degraded or saturated subscribers.
+	//
+	// Useful for proactive monitoring and alerting.
+	// Returns empty slice if all subscribers are healthy.
+	//
+	// Example:
+	//   unhealthy := bus.GetUnhealthySubscribers()
+	//   for _, id := range unhealthy {
+	//       log.Warn("unhealthy subscriber", "id", id, "health", bus.GetHealth(id))
+	//   }
+	GetUnhealthySubscribers() []string
 
 	// Close stops the bus and prevents further operations.
 	// Subsequent Subscribe/Unsubscribe will return ErrBusClosed.
@@ -183,6 +267,45 @@ func (b *bus) Publish(frame Frame) {
 	}
 }
 
+// PublishWithContext sends frame with context to all subscribers (non-blocking).
+//
+// The context is stored in frame.Ctx before distribution. Subscribers can
+// use the context for:
+//   - Distributed tracing (extract trace ID from context)
+//   - Request cancellation (check ctx.Done())
+//   - Deadline enforcement (check ctx.Deadline())
+//
+// For each subscriber:
+//   - If channel has space: frame is sent, Sent counter incremented
+//   - If channel is full: frame is dropped, Dropped counter incremented
+//
+// This method never blocks, even if all subscribers are slow.
+// Panics if bus is closed (check with defer/recover if needed).
+func (b *bus) PublishWithContext(ctx context.Context, frame Frame) {
+	// Attach context to frame
+	frame.Ctx = ctx
+
+	b.totalPublished.Add(1)
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if b.closed {
+		panic("publish on closed bus")
+	}
+
+	for id, ch := range b.subscribers {
+		select {
+		case ch <- frame:
+			// Frame sent successfully
+			b.stats[id].sent.Add(1)
+		default:
+			// Channel full - drop frame
+			b.stats[id].dropped.Add(1)
+		}
+	}
+}
+
 // Stats returns current bus statistics snapshot.
 //
 // The returned BusStats is a snapshot at the time of the call.
@@ -217,6 +340,77 @@ func (b *bus) Stats() BusStats {
 	result.TotalDropped = totalDropped
 
 	return result
+}
+
+// GetHealth returns the health state of a subscriber based on drop rate.
+//
+// Health is computed from current stats:
+//   - HealthHealthy:   Drop rate < 50%
+//   - HealthDegraded:  Drop rate 50-90%
+//   - HealthSaturated: Drop rate > 90%
+//   - HealthUnknown:   No activity (sent + dropped == 0) or ID not found
+//
+// Thread-safe, can be called concurrently with Publish.
+func (b *bus) GetHealth(id string) SubscriberHealth {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	stats, exists := b.stats[id]
+	if !exists {
+		return HealthUnknown
+	}
+
+	sent := stats.sent.Load()
+	dropped := stats.dropped.Load()
+	total := sent + dropped
+
+	if total == 0 {
+		return HealthUnknown
+	}
+
+	dropRate := float64(dropped) / float64(total)
+
+	switch {
+	case dropRate < 0.5:
+		return HealthHealthy
+	case dropRate < 0.9:
+		return HealthDegraded
+	default: // dropRate >= 0.9
+		return HealthSaturated
+	}
+}
+
+// GetUnhealthySubscribers returns IDs of all degraded or saturated subscribers.
+//
+// Returns:
+//   - Empty slice if all subscribers are healthy or unknown
+//   - IDs of subscribers with drop rate >= 50%
+//
+// Useful for proactive monitoring loops.
+// Thread-safe, can be called concurrently with Publish.
+func (b *bus) GetUnhealthySubscribers() []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	var unhealthy []string
+
+	for id, stats := range b.stats {
+		sent := stats.sent.Load()
+		dropped := stats.dropped.Load()
+		total := sent + dropped
+
+		if total == 0 {
+			continue // Skip unknown state
+		}
+
+		dropRate := float64(dropped) / float64(total)
+
+		if dropRate >= 0.5 {
+			unhealthy = append(unhealthy, id)
+		}
+	}
+
+	return unhealthy
 }
 
 // Close stops the bus and prevents further operations.

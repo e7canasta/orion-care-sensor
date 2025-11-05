@@ -31,6 +31,22 @@
 //	fmt.Printf("Published: %d, Sent: %d, Dropped: %d\n",
 //	    stats.TotalPublished, stats.TotalSent, stats.TotalDropped)
 //
+// # Context Propagation (Distributed Tracing)
+//
+//	// Publish with context for tracing
+//	ctx, span := tracer.Start(context.Background(), "frame-publish")
+//	bus.PublishWithContext(ctx, frame)
+//	defer span.End()
+//
+//	// Subscriber reads context
+//	for frame := range workerCh {
+//	    if frame.Ctx != nil {
+//	        _, span := tracer.Start(frame.Ctx, "worker-process")
+//	        defer span.End()
+//	    }
+//	    processFrame(frame)
+//	}
+//
 // # Thread Safety
 //
 // All methods are safe for concurrent use. Multiple goroutines can call Publish()
@@ -57,6 +73,23 @@ type BusStats = bus.BusStats
 
 // SubscriberStats tracks metrics for a single subscriber.
 type SubscriberStats = bus.SubscriberStats
+
+// SubscriberHealth represents the health state of a subscriber.
+type SubscriberHealth = bus.SubscriberHealth
+
+const (
+	// HealthHealthy indicates normal operation with low drop rate (< 50%).
+	HealthHealthy = bus.HealthHealthy
+
+	// HealthDegraded indicates elevated drop rate (50-90%).
+	HealthDegraded = bus.HealthDegraded
+
+	// HealthSaturated indicates critical drop rate (> 90%).
+	HealthSaturated = bus.HealthSaturated
+
+	// HealthUnknown is returned for subscribers with no activity yet.
+	HealthUnknown = bus.HealthUnknown
+)
 
 var (
 	// ErrSubscriberExists is returned when Subscribe is called with a duplicate id.

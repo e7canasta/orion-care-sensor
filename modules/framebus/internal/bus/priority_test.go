@@ -2,6 +2,7 @@ package bus
 
 import (
 	"testing"
+	"time"
 )
 
 // TestPriorityOrdering verifies that under saturation, critical subscribers get frames first.
@@ -24,6 +25,9 @@ func TestPriorityOrdering(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		b.Publish(Frame{Seq: uint64(i), Data: []byte("test")})
 	}
+
+	// Wait for async goroutines
+	time.Sleep(50 * time.Millisecond)
 
 	stats := b.Stats()
 	criticalStats := stats.Subscribers["critical"]
@@ -67,6 +71,9 @@ func TestPriorityLoadShedding(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		b.Publish(Frame{Seq: uint64(i), Data: []byte("test")})
 	}
+
+	// Wait for async goroutines
+	time.Sleep(50 * time.Millisecond)
 
 	stats := b.Stats()
 
@@ -178,6 +185,9 @@ func TestPriorityAllLevels(t *testing.T) {
 		b.Publish(Frame{Seq: uint64(i), Data: []byte("test")})
 	}
 
+	// Wait for async goroutines
+	time.Sleep(50 * time.Millisecond)
+
 	stats := b.Stats()
 
 	// All should receive all frames (buffer sufficient)
@@ -249,6 +259,9 @@ func TestCriticalRetry(t *testing.T) {
 	// Publish 2 frames quickly (both channels buffer=1, second frame will block both)
 	b.Publish(Frame{Seq: 1, Data: []byte("test1")})
 	b.Publish(Frame{Seq: 2, Data: []byte("test2")})
+
+	// Wait for async goroutines (and retry logic for critical)
+	time.Sleep(10 * time.Millisecond)
 
 	stats := b.Stats()
 	criticalStats := stats.Subscribers["critical"]

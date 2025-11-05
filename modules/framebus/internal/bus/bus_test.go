@@ -21,12 +21,13 @@ func TestBasicPublishSubscribe(t *testing.T) {
 	frame := Frame{Seq: 1, Data: []byte("test")}
 	bus.Publish(frame)
 
+	// Publish is fire-and-forget (async), so we need to wait for goroutine
 	select {
 	case received := <-ch:
 		if received.Seq != frame.Seq {
 			t.Errorf("Expected seq %d, got %d", frame.Seq, received.Seq)
 		}
-	case <-time.After(1 * time.Second):
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Timeout waiting for frame")
 	}
 }
@@ -58,15 +59,27 @@ func TestNonBlockingPublish(t *testing.T) {
 		t.Fatal("Publish blocked (should be non-blocking)")
 	}
 
+	// Wait for async goroutines to complete
+	time.Sleep(10 * time.Millisecond)
+
 	// Verify first frame was sent
 	received := <-ch
 	if received.Seq != 1 {
 		t.Errorf("Expected seq 1, got %d", received.Seq)
 	}
 
-	// Verify stats show 1 sent, 1 dropped
-	stats := bus.Stats()
-	subStats := stats.Subscribers["slow"]
+	// Verify stats show 1 sent, 1 dropped (eventually consistent)
+	var stats BusStats
+	var subStats SubscriberStats
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		stats = bus.Stats()
+		subStats = stats.Subscribers["slow"]
+		if subStats.Sent == 1 && subStats.Dropped == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if subStats.Sent != 1 {
 		t.Errorf("Expected 1 sent, got %d", subStats.Sent)
 	}
@@ -93,6 +106,9 @@ func TestStatsAccuracy(t *testing.T) {
 	for i := uint64(1); i <= 5; i++ {
 		bus.Publish(Frame{Seq: i})
 	}
+
+	// Wait for async goroutines to complete
+	time.Sleep(50 * time.Millisecond)
 
 	stats := bus.Stats()
 
@@ -206,6 +222,9 @@ func TestMultipleSubscribers(t *testing.T) {
 	frame := Frame{Seq: 42}
 	bus.Publish(frame)
 
+	// Wait for async goroutines to complete
+	time.Sleep(50 * time.Millisecond)
+
 	// Verify all subscribers received the frame
 	for i, ch := range channels {
 		select {
@@ -253,6 +272,9 @@ func TestConcurrentPublish(t *testing.T) {
 	}
 
 	wg.Wait()
+
+	// Wait for async goroutines to complete
+	time.Sleep(100 * time.Millisecond)
 
 	// Verify stats
 	stats := bus.Stats()
@@ -600,6 +622,9 @@ func TestPublishWithContextNonBlocking(t *testing.T) {
 		t.Fatal("PublishWithContext blocked")
 	}
 
+	// Wait for async goroutines
+	time.Sleep(10 * time.Millisecond)
+
 	// Verify stats
 	stats := bus.Stats()
 	if stats.Subscribers["slow"].Sent != 1 {
@@ -671,6 +696,9 @@ func TestGetHealthHealthy(t *testing.T) {
 		bus.Publish(Frame{Seq: uint64(i)})
 	}
 
+	// Wait for async goroutines
+	time.Sleep(50 * time.Millisecond)
+
 	health := bus.GetHealth("healthy")
 	if health != HealthHealthy {
 		t.Errorf("Expected HealthHealthy, got %v", health)
@@ -698,6 +726,9 @@ func TestGetHealthDegraded(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		bus.Publish(Frame{Seq: uint64(i)})
 	}
+
+	// Wait for async goroutines
+	time.Sleep(50 * time.Millisecond)
 
 	health := bus.GetHealth("degraded")
 	stats := bus.Stats()
@@ -728,6 +759,9 @@ func TestGetHealthSaturated(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		bus.Publish(Frame{Seq: uint64(i)})
 	}
+
+	// Wait for async goroutines
+	time.Sleep(100 * time.Millisecond)
 
 	health := bus.GetHealth("saturated")
 	stats := bus.Stats()
@@ -788,6 +822,9 @@ func TestGetUnhealthySubscribers(t *testing.T) {
 		bus.Publish(Frame{Seq: uint64(i)})
 	}
 
+	// Wait for async goroutines
+	time.Sleep(100 * time.Millisecond)
+
 	unhealthy := bus.GetUnhealthySubscribers()
 
 	// Should include degraded-1 and saturated-1, not healthy-1
@@ -827,6 +864,9 @@ func TestGetUnhealthySubscribersEmpty(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		bus.Publish(Frame{Seq: uint64(i)})
 	}
+
+	// Wait for async goroutines
+	time.Sleep(50 * time.Millisecond)
 
 	unhealthy := bus.GetUnhealthySubscribers()
 	if len(unhealthy) != 0 {
@@ -956,8 +996,11 @@ func TestLazyRebuild(t *testing.T) {
 		t.Errorf("Expected empty cache before Publish, got %d entries", len(b.sortedCache))
 	}
 
-	// First Publish triggers rebuild
+	// First Publish triggers rebuild (async)
 	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Wait for async rebuild to complete
+	time.Sleep(50 * time.Millisecond)
 
 	// Cache should be clean now
 	if b.cacheDirty.Load() {
@@ -993,6 +1036,9 @@ func TestEventualConsistency(t *testing.T) {
 	// First Publish - only worker-1 receives
 	b.Publish(Frame{Seq: 1, Data: []byte("frame1")})
 
+	// Wait for async goroutines
+	time.Sleep(50 * time.Millisecond)
+
 	stats := b.Stats()
 	if stats.Subscribers["worker-1"].Sent != 1 {
 		t.Errorf("Expected worker-1 to receive 1 frame, got %d", stats.Subscribers["worker-1"].Sent)
@@ -1002,20 +1048,33 @@ func TestEventualConsistency(t *testing.T) {
 	ch2 := make(chan Frame, 10)
 	b.Subscribe("worker-2", ch2)
 
-	// Second Publish - both workers receive (eventual consistency)
+	// Second Publish - uses stale cache (only worker-1), triggers async rebuild
 	b.Publish(Frame{Seq: 2, Data: []byte("frame2")})
 
+	// Wait for async rebuild to complete
+	time.Sleep(50 * time.Millisecond)
+
+	// Third Publish - uses rebuilt cache (both workers)
+	b.Publish(Frame{Seq: 3, Data: []byte("frame3")})
+
+	// Wait for async goroutines
+	time.Sleep(50 * time.Millisecond)
+
 	stats = b.Stats()
-	if stats.Subscribers["worker-1"].Sent != 2 {
-		t.Errorf("Expected worker-1 to receive 2 frames, got %d", stats.Subscribers["worker-1"].Sent)
+	if stats.Subscribers["worker-1"].Sent != 3 {
+		t.Errorf("Expected worker-1 to receive 3 frames, got %d", stats.Subscribers["worker-1"].Sent)
 	}
 	if stats.Subscribers["worker-2"].Sent != 1 {
-		t.Errorf("Expected worker-2 to receive 1 frame (not frame1), got %d", stats.Subscribers["worker-2"].Sent)
+		t.Errorf("Expected worker-2 to receive 1 frame (frame3, not frame1 or frame2), got %d", stats.Subscribers["worker-2"].Sent)
 	}
 
-	// worker-2 did NOT receive frame1 (eventual consistency - not retroactive)
+	// worker-2 did NOT receive frame1 or frame2 (eventual consistency - applied on frame3)
 	if len(ch2) != 1 {
 		t.Errorf("Expected worker-2 channel to have 1 frame, got %d", len(ch2))
+	}
+	// Verify worker-2 received frame3
+	if frame := <-ch2; frame.Seq != 3 {
+		t.Errorf("Expected worker-2 to receive frame 3, got frame %d", frame.Seq)
 	}
 }
 
@@ -1040,8 +1099,11 @@ func TestBatchSubscribeOptimization(t *testing.T) {
 		t.Error("Expected cache to be empty before Publish (lazy rebuild)")
 	}
 
-	// First Publish triggers ONE rebuild for all 10 subscribes
+	// First Publish triggers ONE rebuild for all 10 subscribes (async)
 	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Wait for async rebuild to complete
+	time.Sleep(50 * time.Millisecond)
 
 	// Cache now populated
 	if len(b.sortedCache) != 10 {
@@ -1064,8 +1126,11 @@ func TestUnsubscribeInvalidatesCache(t *testing.T) {
 	b.Subscribe("worker-1", ch1)
 	b.Subscribe("worker-2", ch2)
 
-	// Trigger rebuild
+	// Trigger rebuild (async)
 	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Wait for async rebuild to complete
+	time.Sleep(50 * time.Millisecond)
 
 	// Cache clean
 	if b.cacheDirty.Load() {
@@ -1079,8 +1144,11 @@ func TestUnsubscribeInvalidatesCache(t *testing.T) {
 		t.Error("Expected cache to be dirty after Unsubscribe")
 	}
 
-	// Next Publish rebuilds cache
+	// Next Publish rebuilds cache (async)
 	b.Publish(Frame{Seq: 2, Data: []byte("test")})
+
+	// Wait for async rebuild to complete
+	time.Sleep(50 * time.Millisecond)
 
 	// Cache clean again
 	if b.cacheDirty.Load() {
@@ -1110,8 +1178,11 @@ func TestSmartCheckAllSamePriority(t *testing.T) {
 		t.Error("Expected needsSorting=false for all same priority (Normal)")
 	}
 
-	// Trigger rebuild
+	// Trigger rebuild (async)
 	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Wait for async rebuild to complete
+	time.Sleep(50 * time.Millisecond)
 
 	// Verify cache populated (even without sorting)
 	if len(b.sortedCache) != 5 {
@@ -1146,8 +1217,11 @@ func TestSmartCheckMixedPriorities(t *testing.T) {
 		t.Error("Expected needsSorting=true for mixed priorities")
 	}
 
-	// Trigger rebuild
+	// Trigger rebuild (async)
 	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Wait for async rebuild to complete
+	time.Sleep(50 * time.Millisecond)
 
 	// Verify cache populated and sorted
 	if len(b.sortedCache) != 3 {
@@ -1180,8 +1254,11 @@ func TestSmartCheckSingleSubscriber(t *testing.T) {
 		t.Error("Expected needsSorting=false for single subscriber")
 	}
 
-	// Trigger rebuild
+	// Trigger rebuild (async)
 	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Wait for async rebuild to complete
+	time.Sleep(50 * time.Millisecond)
 
 	// Verify cache has 1 entry
 	if len(b.sortedCache) != 1 {
@@ -1435,6 +1512,153 @@ func BenchmarkPublishMixedPriorities(b *testing.B) {
 
 	frame := Frame{Seq: 1, Data: make([]byte, 1024)}
 
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bus.Publish(frame)
+	}
+}
+
+// BenchmarkConcurrentFanout measures the concurrent fan-out performance at different scales.
+// This benchmark validates the speedup claims from ADR-007.
+func BenchmarkConcurrentFanout(b *testing.B) {
+	scales := []int{1, 5, 10, 50, 100}
+
+	for _, n := range scales {
+		b.Run(fmt.Sprintf("%d_subscribers", n), func(b *testing.B) {
+			bus := New()
+			defer bus.Close()
+
+			// Create n subscribers with large buffers (no drops during benchmark)
+			for i := 0; i < n; i++ {
+				ch := make(chan Frame, 1000)
+				bus.Subscribe(fmt.Sprintf("worker-%d", i), ch)
+
+				// Consumer draining
+				go func(ch chan Frame) {
+					for range ch {
+					}
+				}(ch)
+			}
+
+			// Warmup to trigger initial rebuild
+			bus.Publish(Frame{Seq: 0, Data: []byte("warmup")})
+			time.Sleep(10 * time.Millisecond)
+
+			frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				bus.Publish(frame)
+			}
+		})
+	}
+}
+
+// BenchmarkPublishLatency measures the end-to-end latency (Publish return time).
+// Sequential: O(N × 500ns), Concurrent: O(spawn overhead) ≈ 100ns + N×100ns.
+func BenchmarkPublishLatency(b *testing.B) {
+	scales := []int{1, 5, 10, 50, 100}
+
+	for _, n := range scales {
+		b.Run(fmt.Sprintf("%d_subscribers", n), func(b *testing.B) {
+			bus := New()
+			defer bus.Close()
+
+			// Create n subscribers
+			for i := 0; i < n; i++ {
+				ch := make(chan Frame, 1000)
+				bus.Subscribe(fmt.Sprintf("worker-%d", i), ch)
+
+				// Consumer draining
+				go func(ch chan Frame) {
+					for range ch {
+					}
+				}(ch)
+			}
+
+			// Warmup
+			bus.Publish(Frame{Seq: 0, Data: []byte("warmup")})
+			time.Sleep(10 * time.Millisecond)
+
+			frame := Frame{Seq: 1, Data: make([]byte, 100)}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				start := time.Now()
+				bus.Publish(frame)
+				elapsed := time.Since(start)
+				b.ReportMetric(float64(elapsed.Nanoseconds()), "ns/publish")
+			}
+		})
+	}
+}
+
+// BenchmarkThroughput measures frames/second at different scales.
+// Validates that throughput doesn't degrade with more subscribers.
+func BenchmarkThroughput(b *testing.B) {
+	scales := []int{1, 5, 10, 50, 100}
+
+	for _, n := range scales {
+		b.Run(fmt.Sprintf("%d_subscribers", n), func(b *testing.B) {
+			bus := New()
+			defer bus.Close()
+
+			// Create n subscribers with realistic buffers
+			for i := 0; i < n; i++ {
+				ch := make(chan Frame, 10)
+				bus.Subscribe(fmt.Sprintf("worker-%d", i), ch)
+
+				// Consumer with realistic processing time (~1ms)
+				go func(ch chan Frame) {
+					for range ch {
+						time.Sleep(1 * time.Millisecond)
+					}
+				}(ch)
+			}
+
+			// Warmup
+			bus.Publish(Frame{Seq: 0, Data: []byte("warmup")})
+			time.Sleep(10 * time.Millisecond)
+
+			frame := Frame{Seq: 1, Data: make([]byte, 50000)} // 50KB frame (realistic)
+
+			b.ResetTimer()
+			start := time.Now()
+			for i := 0; i < b.N; i++ {
+				bus.Publish(frame)
+			}
+			elapsed := time.Since(start)
+
+			framesPerSec := float64(b.N) / elapsed.Seconds()
+			b.ReportMetric(framesPerSec, "frames/sec")
+		})
+	}
+}
+
+// BenchmarkMemoryOverhead measures goroutine spawn memory cost.
+// Concurrent fan-out spawns N goroutines per Publish().
+func BenchmarkMemoryOverhead(b *testing.B) {
+	bus := New()
+	defer bus.Close()
+
+	// 100 subscribers (worst case for Multi-stream Orion 2.0)
+	for i := 0; i < 100; i++ {
+		ch := make(chan Frame, 100)
+		bus.Subscribe(fmt.Sprintf("worker-%d", i), ch)
+
+		go func(ch chan Frame) {
+			for range ch {
+			}
+		}(ch)
+	}
+
+	// Warmup
+	bus.Publish(Frame{Seq: 0, Data: []byte("warmup")})
+	time.Sleep(10 * time.Millisecond)
+
+	frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		bus.Publish(frame)

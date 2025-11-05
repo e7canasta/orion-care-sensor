@@ -38,6 +38,18 @@ FrameBus prioritizes real-time processing over guaranteed delivery. If a subscri
 ❌ **NOT a health checker** - Does not monitor subscriber health
 ❌ **NOT a frame processor** - Does not modify or inspect frame contents
 
+## Orion - The Big Picture - NO es:
+  - ❌ "Configuro 1 vez al inicio y corre forever"
+  - ❌ Workers estáticos
+
+  Orion ES:
+  - ✅ Articulación continua de "lentes inteligentes" según escena
+  - ✅ Workers entran/salen dinámicamente (no al nivel de frames, pero frecuente)
+  - ✅ Prioridades cambian según contexto (ej: detecta caída → EdgeExpert sube a Critical)
+
+[About ORION_SYSTEM_CONTEXT](./docs/ORION_SYSTEM_CONTEXT.md)
+
+
 ### Separation of Concerns
 
 | Concern | Responsible Module | FrameBus Role |

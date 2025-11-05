@@ -361,3 +361,4 @@ docs/
 ---
 
 **Review Status**: 🟢 Ready for implementation (ADRs complete, design validated)
+- monolito ni en los documentos

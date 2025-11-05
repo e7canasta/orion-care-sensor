@@ -64,7 +64,43 @@ type SubscriberStats struct {
 
 	// Dropped is the number of frames dropped due to full channel
 	Dropped uint64
+
+	// Priority is the subscriber's priority level
+	Priority SubscriberPriority
 }
+
+// SubscriberPriority defines load shedding priority for subscribers.
+//
+// Lower numeric values = higher priority (protected during load shedding).
+//
+// Priority levels follow industry standards (AWS SQS, Kubernetes QoS):
+//   - Critical: Mission-critical workloads (fall detection, medical alerts)
+//   - High: Important but not life-critical (sleep quality monitoring)
+//   - Normal: Standard workloads (default for backward compatibility)
+//   - BestEffort: Experimental or non-essential workloads
+type SubscriberPriority int
+
+const (
+	// PriorityCritical: Never drop frames if possible.
+	// Use for: Mission-critical experts with SLAs (EdgeExpert, ExitExpert)
+	// Drop policy: Last to drop (protected under load)
+	PriorityCritical SubscriberPriority = 0
+
+	// PriorityHigh: Drop only under severe load.
+	// Use for: Important but not life-critical (SleepExpert)
+	// Drop policy: Drop after BestEffort/Normal, before Critical
+	PriorityHigh SubscriberPriority = 1
+
+	// PriorityNormal: Default priority (backward compatible).
+	// Use for: Standard workers without special requirements (CaregiverExpert)
+	// Drop policy: Standard drop behavior
+	PriorityNormal SubscriberPriority = 2
+
+	// PriorityBestEffort: Drop first under any load.
+	// Use for: Experimental models, research, telemetry (PostureExpert)
+	// Drop policy: First to drop (no SLA guarantees)
+	PriorityBestEffort SubscriberPriority = 3
+)
 
 // SubscriberHealth represents the health state of a subscriber based on drop rate.
 type SubscriberHealth string
@@ -98,9 +134,25 @@ var (
 
 // Bus distributes frames to multiple subscribers with drop policy.
 type Bus interface {
-	// Subscribe registers a channel to receive frames.
+	// Subscribe registers a channel to receive frames with default (Normal) priority.
 	// Returns error if id already exists or if bus is closed.
+	//
+	// For backward compatibility, this method uses PriorityNormal.
+	// Use SubscribeWithPriority() to specify a custom priority.
 	Subscribe(id string, ch chan<- Frame) error
+
+	// SubscribeWithPriority registers a channel with a specific priority level.
+	// Returns error if id already exists or if bus is closed.
+	//
+	// Priority levels:
+	//   - PriorityCritical:   Mission-critical (fall detection)
+	//   - PriorityHigh:       Important (sleep monitoring)
+	//   - PriorityNormal:     Standard (default)
+	//   - PriorityBestEffort: Experimental (research)
+	//
+	// Example:
+	//   bus.SubscribeWithPriority("edge-expert", ch, PriorityCritical)
+	SubscribeWithPriority(id string, ch chan<- Frame, priority SubscriberPriority) error
 
 	// Unsubscribe removes a subscriber by id.
 	// Returns error if id not found or if bus is closed.
@@ -110,6 +162,9 @@ type Bus interface {
 	// Drops frame for subscribers whose channels are full.
 	// Panics if bus is closed.
 	//
+	// Subscribers are processed in priority order (Critical first).
+	// Under load, lower-priority subscribers drop frames before higher-priority ones.
+	//
 	// Note: frame.Ctx is ignored by Publish. Use PublishWithContext
 	// if you need to set a context for the frame.
 	Publish(frame Frame)
@@ -118,6 +173,9 @@ type Bus interface {
 	// The context is stored in frame.Ctx for downstream tracing/cancellation.
 	// Drops frame for subscribers whose channels are full.
 	// Panics if bus is closed.
+	//
+	// Subscribers are processed in priority order (Critical first).
+	// Under load, lower-priority subscribers drop frames before higher-priority ones.
 	//
 	// Use cases:
 	//   - Distributed tracing: Propagate trace ID through the pipeline
@@ -169,6 +227,12 @@ type Bus interface {
 	Close() error
 }
 
+// subscriberEntry holds channel and priority for a subscriber.
+type subscriberEntry struct {
+	ch       chan<- Frame
+	priority SubscriberPriority
+}
+
 // subscriberStats holds internal atomic counters.
 type subscriberStats struct {
 	sent    atomic.Uint64
@@ -178,7 +242,7 @@ type subscriberStats struct {
 // bus is the concrete implementation of Bus.
 type bus struct {
 	mu          sync.RWMutex
-	subscribers map[string]chan<- Frame
+	subscribers map[string]*subscriberEntry // Changed: now holds entry with priority
 	stats       map[string]*subscriberStats
 	closed      bool
 
@@ -189,14 +253,19 @@ type bus struct {
 // New creates a new FrameBus.
 func New() Bus {
 	return &bus{
-		subscribers: make(map[string]chan<- Frame),
+		subscribers: make(map[string]*subscriberEntry),
 		stats:       make(map[string]*subscriberStats),
 		closed:      false,
 	}
 }
 
-// Subscribe registers a channel to receive frames.
+// Subscribe registers a channel with default (Normal) priority.
 func (b *bus) Subscribe(id string, ch chan<- Frame) error {
+	return b.SubscribeWithPriority(id, ch, PriorityNormal)
+}
+
+// SubscribeWithPriority registers a channel with a specific priority level.
+func (b *bus) SubscribeWithPriority(id string, ch chan<- Frame, priority SubscriberPriority) error {
 	if ch == nil {
 		return errors.New("subscriber channel cannot be nil")
 	}
@@ -212,7 +281,10 @@ func (b *bus) Subscribe(id string, ch chan<- Frame) error {
 		return ErrSubscriberExists
 	}
 
-	b.subscribers[id] = ch
+	b.subscribers[id] = &subscriberEntry{
+		ch:       ch,
+		priority: priority,
+	}
 	b.stats[id] = &subscriberStats{}
 
 	return nil
@@ -239,6 +311,9 @@ func (b *bus) Unsubscribe(id string) error {
 
 // Publish sends frame to all subscribers (non-blocking).
 //
+// Subscribers are processed in priority order (Critical first, BestEffort last).
+// Under load, lower-priority subscribers drop frames before higher-priority ones.
+//
 // For each subscriber:
 //   - If channel has space: frame is sent, Sent counter incremented
 //   - If channel is full: frame is dropped, Dropped counter incremented
@@ -255,14 +330,18 @@ func (b *bus) Publish(frame Frame) {
 		panic("publish on closed bus")
 	}
 
-	for id, ch := range b.subscribers {
+	// Sort subscribers by priority (Critical first)
+	sorted := b.sortSubscribersByPriority()
+
+	// Distribute to subscribers in priority order
+	for _, sub := range sorted {
 		select {
-		case ch <- frame:
+		case sub.entry.ch <- frame:
 			// Frame sent successfully
-			b.stats[id].sent.Add(1)
+			b.stats[sub.id].sent.Add(1)
 		default:
 			// Channel full - drop frame
-			b.stats[id].dropped.Add(1)
+			b.stats[sub.id].dropped.Add(1)
 		}
 	}
 }
@@ -274,6 +353,9 @@ func (b *bus) Publish(frame Frame) {
 //   - Distributed tracing (extract trace ID from context)
 //   - Request cancellation (check ctx.Done())
 //   - Deadline enforcement (check ctx.Deadline())
+//
+// Subscribers are processed in priority order (Critical first, BestEffort last).
+// Under load, lower-priority subscribers drop frames before higher-priority ones.
 //
 // For each subscriber:
 //   - If channel has space: frame is sent, Sent counter incremented
@@ -294,14 +376,18 @@ func (b *bus) PublishWithContext(ctx context.Context, frame Frame) {
 		panic("publish on closed bus")
 	}
 
-	for id, ch := range b.subscribers {
+	// Sort subscribers by priority (Critical first)
+	sorted := b.sortSubscribersByPriority()
+
+	// Distribute to subscribers in priority order
+	for _, sub := range sorted {
 		select {
-		case ch <- frame:
+		case sub.entry.ch <- frame:
 			// Frame sent successfully
-			b.stats[id].sent.Add(1)
+			b.stats[sub.id].sent.Add(1)
 		default:
 			// Channel full - drop frame
-			b.stats[id].dropped.Add(1)
+			b.stats[sub.id].dropped.Add(1)
 		}
 	}
 }
@@ -330,9 +416,16 @@ func (b *bus) Stats() BusStats {
 		totalSent += sent
 		totalDropped += dropped
 
+		// Get priority from subscriber entry
+		priority := PriorityNormal // Default if entry not found
+		if entry, exists := b.subscribers[id]; exists {
+			priority = entry.priority
+		}
+
 		result.Subscribers[id] = SubscriberStats{
-			Sent:    sent,
-			Dropped: dropped,
+			Sent:     sent,
+			Dropped:  dropped,
+			Priority: priority,
 		}
 	}
 
@@ -411,6 +504,37 @@ func (b *bus) GetUnhealthySubscribers() []string {
 	}
 
 	return unhealthy
+}
+
+// sortedSubscriber holds a subscriber entry with its ID for sorting.
+type sortedSubscriber struct {
+	id    string
+	entry *subscriberEntry
+}
+
+// sortSubscribersByPriority returns subscribers sorted by priority.
+// Lower priority value = higher priority (Critical=0 first, BestEffort=3 last).
+//
+// Called within RLock, returns a slice to avoid holding lock during iteration.
+func (b *bus) sortSubscribersByPriority() []sortedSubscriber {
+	sorted := make([]sortedSubscriber, 0, len(b.subscribers))
+
+	for id, entry := range b.subscribers {
+		sorted = append(sorted, sortedSubscriber{
+			id:    id,
+			entry: entry,
+		})
+	}
+
+	// Sort by priority (Critical first)
+	// Using simple insertion sort for small N (typically 5-10 subscribers)
+	for i := 1; i < len(sorted); i++ {
+		for j := i; j > 0 && sorted[j].entry.priority < sorted[j-1].entry.priority; j-- {
+			sorted[j], sorted[j-1] = sorted[j-1], sorted[j]
+		}
+	}
+
+	return sorted
 }
 
 // Close stops the bus and prevents further operations.

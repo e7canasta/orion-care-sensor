@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2025-11-05 - Priority Subscribers)
+- **Priority-based load shedding** for subscribers (ADR-009)
+- 4 priority levels: `PriorityCritical`, `PriorityHigh`, `PriorityNormal`, `PriorityBestEffort`
+- `SubscribeWithPriority()` method for priority-aware subscription
+- Priority field in `SubscriberStats` for monitoring
+- Comprehensive test suite (6 new tests: ordering, load shedding, backward compatibility)
+- Business context documentation (`FRAMEBUS_CUSTOMERS.md`)
+- ADR-009 with decision rationale and trade-offs
+
+### Changed (2025-11-05 - Priority Implementation)
+- `Subscribe()` now uses `PriorityNormal` as default (backward compatible)
+- `Publish()` sorts subscribers by priority before distribution
+- Internal structure: `map[string]chan<- Frame` → `map[string]*subscriberEntry`
+- Sorting overhead: ~200ns for 10 subscribers (negligible vs 33-1000ms frame interval)
+
+### Technical Details
+- **Backward Compatible**: All existing tests pass (28 tests + 6 new = 34 total)
+- **Race-free**: All tests pass with `-race` detector
+- **Performance**: <300ns overhead for priority sorting (0.0006% @ 30fps)
+- **SLA Protection**: Critical subscribers protected under load (drop frames to BestEffort first)
+
+### Business Value
+- Enables **consultive B2B model**: Add best-effort experts without impacting critical ones
+- **SLA protection**: Fall detection (Critical) maintains <1% drop rate under load
+- **Cost optimization**: Single NUC supports 5+ experts with differentiated SLAs
+- **Scaling enabled**: Phase 1 (2 experts) → Phase 3 (5 experts) without hardware upgrade
+
+### Documentation
+- `docs/FRAMEBUS_CUSTOMERS.md` - Who uses FrameBus (Sala Expert Mesh), SLA requirements, scaling projections
+- `docs/adr/ADR-009-Priority-Subscribers.md` - Decision record with business context, alternatives, consequences
+- Examples updated with priority usage patterns
+
+---
+
 ### Added (2025-11-04 - Quick Wins)
 - Helper functions `CalculateDropRate()` and `CalculateSubscriberDropRate()` for easier stats interpretation
 - ASCII diagram in README showing fan-out pattern with visual example

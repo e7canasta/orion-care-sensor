@@ -77,6 +77,27 @@ type SubscriberStats = bus.SubscriberStats
 // SubscriberHealth represents the health state of a subscriber.
 type SubscriberHealth = bus.SubscriberHealth
 
+// SubscriberPriority defines load shedding priority for subscribers.
+type SubscriberPriority = bus.SubscriberPriority
+
+const (
+	// PriorityCritical: Never drop frames if possible.
+	// Use for: Mission-critical experts with SLAs (EdgeExpert, ExitExpert)
+	PriorityCritical = bus.PriorityCritical
+
+	// PriorityHigh: Drop only under severe load.
+	// Use for: Important but not life-critical (SleepExpert)
+	PriorityHigh = bus.PriorityHigh
+
+	// PriorityNormal: Default priority (backward compatible).
+	// Use for: Standard workers without special requirements (CaregiverExpert)
+	PriorityNormal = bus.PriorityNormal
+
+	// PriorityBestEffort: Drop first under any load.
+	// Use for: Experimental models, research, telemetry (PostureExpert)
+	PriorityBestEffort = bus.PriorityBestEffort
+)
+
 const (
 	// HealthHealthy indicates normal operation with low drop rate (< 50%).
 	HealthHealthy = bus.HealthHealthy

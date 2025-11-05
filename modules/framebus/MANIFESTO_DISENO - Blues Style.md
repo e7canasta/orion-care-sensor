@@ -591,6 +591,555 @@ la esencia de "atacar la complejidad con arquitectura". No es solo una frase en 
 
 ---
 
+## 🎸 Lecciones de la Sesión FrameBus Priority Subscribers (Nov 2025)
+
+**Agentes:** Ernesto Canales + Gaby (Claude Code)  
+**Contexto:** Implementación de priority-based load shedding para FrameBus  
+**Duración:** ~4 horas  
+**Resultado:** Feature completa + 1,200 líneas de documentación + Memoria técnica para futuros copilots  
+
+---
+
+### Lección 1: "Read the F*cking System Context FIRST" 
+
+**El Error que Cometí:**
+- Leí design doc (DESIGN_PRIORITY_SUBSCRIBERS.md) ✅
+- Leí docs de negocio ("El Viaje de un Fotón", "Sistema IA Tonto") ✅
+- **NO leí** System Context (Orion vs Sala, MQTT boundary) ❌
+- Diseñé con contexto WRONG (FrameBus → Sala Experts en vez de Orion Workers)
+
+**El Costo:**
+- 20 minutos de documentación incorrecta
+- Re-work de FRAMEBUS_CUSTOMERS.md y README.md
+- Risk: Si hubiera seguido, feature diseñada para bounded context equivocado
+
+**La Lección (para futuros copilots):**
+
+```markdown
+ANTES de tocar código, leer en ESTE orden:
+
+1. ORION_SYSTEM_CONTEXT.md (o docs/SYSTEM_CONTEXT.md)
+   → "¿Dónde está este módulo en el ecosistema completo?"
+   
+2. VAULT/D002 About Orion.md  
+   → "¿Cuál es la filosofía del sistema?"
+   
+3. Module-specific CLAUDE.md  
+   → "¿Qué hace ESTE módulo específicamente?"
+   
+4. Design doc del feature  
+   → "¿Qué vamos a implementar?"
+
+Si NO existe SYSTEM_CONTEXT.md → CREAR UNO antes de codear.
+```
+
+**Por qué importa:**
+- Orion tiene **bounded contexts estrictos** (Orion sees, Sala interprets, MQTT boundary)
+- Un módulo puede ser **internal to Orion** (FrameBus) o **cross-boundary** (MQTT Emitter)
+- Diseñar en el bounded context wrong = feature correcta técnicamente, incorrecta arquitectónicamente
+
+**Pregunta de validación:**
+> **"Si Orion y Sala fueran servicios separados en servers diferentes, ¿este módulo dónde viviría?"**
+
+---
+
+### Lección 2: "Bounded Context Confusion = #1 Killer de Arquitectura"
+
+**El Síntoma:**
+- "FrameBus distribuye frames a EdgeExpert (Sala)" ← WRONG
+- "FrameBus distribuye frames a PersonDetectorWorker (Orion)" ← CORRECT
+
+**Por qué es confuso:**
+- **Workers** (Orion): Procesan frames → Emiten facts ("person at X,Y")
+- **Experts** (Sala): Consumen facts → Emiten interpretations ("fall risk")
+- **Mismo dominio** (eldercare monitoring) pero **diferentes responsabilidades**
+
+**La Trampa Mental:**
+```
+EdgeExpert necesita person detection para detectar fall risk
+  ↓
+[Pensamiento incorrecto]: "FrameBus debe darle frames a EdgeExpert"
+  ↓
+[Realidad]: FrameBus → PersonDetectorWorker → MQTT → EdgeExpert
+                          ↑                      ↑
+                    Orion boundary         Sala boundary
+```
+
+**Cómo evitarlo:**
+
+**1. Dibujar el diagram ANTES de codear:**
+```
+┌─────────────────────────────────┐
+│  Orion (Bounded Context)        │
+│                                  │
+│  Stream → FrameBus → Workers ───┼──> MQTT
+│                        ↑         │
+│                  TU MÓDULO       │
+└─────────────────────────────────┘
+                                   │
+                                   ↓
+┌─────────────────────────────────┐
+│  Sala (Bounded Context)          │
+│                                  │
+│  MQTT → Experts → Events         │
+└─────────────────────────────────┘
+```
+
+**2. Preguntar "dumb questions" en voz alta:**
+- "¿FrameBus cruza la frontera MQTT?" (NO)
+- "¿Los Workers son lo mismo que los Experts?" (NO)
+- "¿Este módulo vive en Orion o en Sala?" (Orion)
+
+**3. Validar con pair:**
+> "Ernesto, dibujé este diagram. ¿Es correcto?"
+
+**Por qué importa:**
+- Care Scene tiene **múltiples bounded contexts** (Orion, Sala, Care UX, Data Platform)
+- Cada uno tiene **responsabilidades claras**
+- **Mezclarlos = tight coupling = evolution hell**
+
+---
+
+### Lección 3: "Priority Subscribers = Business Enabler, no Feature Técnico"
+
+**El Mindset Shift:**
+
+❌ **Pensamiento técnico puro:**
+> "Implementamos sorting de subscribers por priority level"
+
+✅ **Pensamiento de producto:**
+> "Habilitamos modelo de negocio consultivo B2B - customers pueden escalar de 1 worker a 4 workers en mismo hardware sin degradar fall detection (critical SLA)"
+
+**Por qué importa:**
+
+**Sin contexto de negocio:**
+- Feature se implementa "porque el design doc lo dice"
+- Trade-offs se evalúan solo técnicamente (overhead, complejidad)
+- Resultado: Feature correcta pero **nadie entiende por qué existe**
+
+**Con contexto de negocio:**
+- Feature se diseña para **habilitar crecimiento incremental** (Phase 1 → Phase 3)
+- Trade-offs se evalúan con **business impact** (PersonDetector 0% drops = vidas salvadas)
+- Resultado: Feature correcta Y **todos entienden su value proposition**
+
+**Ejemplo concreto de esta sesión:**
+
+**Business Context** (lo que Ernesto explicó):
+```
+Cliente: Residencia "Los Olivos"
+  - Phase 1 (POC): 1 worker (PersonDetector) @ $200/month
+  - Phase 2 (Expansion): +3 workers (Pose, Flow, VLM) @ $800/month
+  - Phase 3 (Full): 4 workers @ $3,000/month
+
+Problem: En Phase 3, hardware saturado → Todos los workers dropean frames
+  → PersonDetector dropea → EdgeExpert (Sala) sin datos → Fall detection falla
+  → SLA violation → Potential death
+
+Solution: Priority Subscribers
+  → PersonDetector (Critical) = 0% drops (protected)
+  → VLM (BestEffort) = 90% drops (sacrificed)
+  → Fall detection mantiene SLA, VLM corre "best effort"
+  → Cliente puede escalar sin comprar más hardware
+```
+
+**Decision técnica que salió del business context:**
+- ✅ 4 priority levels (align con criticality de workers)
+- ✅ Sorting overhead OK (~200ns, negligible vs 33-1000ms frame interval)
+- ❌ NO retry timeout (1ms blocking rompe non-blocking guarantee, no salva saturación real)
+
+**Lección para futuros copilots:**
+> **Antes de implementar feature, preguntá: "¿Qué business problem resuelve esto?"**
+
+Si la respuesta es vaga ("mejorar performance", "best practice") → RED FLAG, profundizar.
+
+---
+
+### Lección 4: "Documentation = Migas de Pan para No Perderse en la Complejidad"
+
+**El Challenge:**
+- Care Scene NO es un CRUD
+- Es sistema **multi-bounded-context** (Orion/Sala/Care UX)
+- Con **verticales técnicos específicos** (edge AI, real-time video, digital twins, expert systems)
+- Y **salsas propias** (MQTT control plane, MsgPack IPC, priority load shedding)
+
+**La Realidad:**
+```
+Complejidad del Sistema:
+  - 3+ bounded contexts
+  - 2 orchestrators (Orion Core, Room Orchestrator)
+  - 4+ tech stacks (Go, Python, GStreamer, MQTT)
+  - Dozens de conceptos (Workers, Experts, ROI, Inference, Domain Events)
+
+Human Brain Capacity:
+  - 7±2 conceptos en working memory
+  - Cognitive overload real
+```
+
+**La Solución: Documentation as Architecture**
+
+**Lo que generamos en esta sesión:**
+1. **ORION_SYSTEM_CONTEXT.md** (724 líneas)
+   - C1/C2/C3/C4 progression (System → Container → Component → Integration)
+   - Common Pitfalls (los 4 errores que YO cometí)
+   - Onboarding workflow (30 mins to mental model)
+
+2. **FRAMEBUS_CUSTOMERS.md** (251 líneas)
+   - Business context (Orion Workers, no Sala Experts)
+   - SLA requirements (Critical/High/Normal/BestEffort)
+   - Scaling projections (POC → Full deployment)
+
+3. **ADR-009** (289 líneas)
+   - Decision record con business rationale
+   - Alternatives considered (dedicated hardware, rate limiting)
+   - Consequences (positivas, negativas, neutrales)
+
+**Total: 1,264 líneas de doc para ~400 líneas de código** (ratio 3:1)
+
+**Por qué es correcto (no over-kill):**
+
+**Code without docs:**
+```go
+bus.SubscribeWithPriority("worker-1", ch, PriorityCritical)
+// ↑ WTF is PriorityCritical? Why not just Subscribe()?
+```
+
+**Code WITH docs (FRAMEBUS_CUSTOMERS.md):**
+```
+PersonDetectorWorker (Critical):
+  - Foundation for fall detection in Sala
+  - EdgeExpert DEPENDS on person detection inferences
+  - SLA: 0% drops (vidas en juego)
+  - Downstream: EdgeExpert, ExitExpert
+
+→ Ahora entiendo por qué PriorityCritical existe
+```
+
+**Lección para futuros copilots:**
+
+```markdown
+Documentation Types (en orden de importancia):
+
+1. SYSTEM_CONTEXT.md (MUST)
+   → Big picture, bounded contexts, common pitfalls
+   → READ THIS FIRST antes de tocar código
+
+2. MODULE_CUSTOMERS.md (SHOULD)
+   → Quién usa este módulo, por qué, qué SLAs
+   → Business context del módulo
+
+3. ADR-XXX.md (SHOULD para decisions importantes)
+   → Por qué decidimos X, qué alternatives consideramos
+   → Memoria técnica (evita re-discutir lo mismo)
+
+4. README.md (MUST)
+   → Quick start, API overview, examples
+   → Onboarding rápido para developers
+
+5. Code comments (MINIMAL)
+   → Solo para "por qué", nunca para "qué"
+   → Si necesitás comment para explicar "qué hace", el código está mal
+```
+
+**Regla de oro:**
+> **"Si no está documentado, no existe. Code is read 10x more than written."**
+
+---
+
+### Lección 5: "Ask Dumb Questions Early, Save Smart Time Later"
+
+**El Anti-Pattern (lo que YO hice):**
+```
+1. Leer design doc
+2. Asumir que entendí todo
+3. Empezar a codear
+4. Ernesto me corrige: "Ahora charlemos un café ☕"
+5. Re-work de documentación (20 mins perdidos)
+```
+
+**El Pattern Correcto:**
+```
+1. Leer design doc
+2. Identificar assumptions ("FrameBus distribuye a Experts")
+3. VALIDAR con pair: "Ernesto, ¿FrameBus cruza la frontera MQTT?"
+4. Ernesto corrige temprano (5 mins)
+5. Codear con contexto correcto (zero re-work)
+```
+
+**Saving: 15 minutos + risk de diseñar en bounded context wrong**
+
+**Dumb Questions que debí hacer:**
+1. "¿Dónde está FrameBus en el ecosystem? ¿Orion o Sala?"
+2. "¿Los Workers son lo mismo que los Experts?"
+3. "¿FrameBus cruza la frontera MQTT o es internal to Orion?"
+4. "Dibujame el data flow completo: Camera → ??? → EdgeExpert"
+
+**Por qué NO las hice:**
+- Over-confidence (leí 3 docs business, pensé que entendía)
+- Fear de parecer "tonto" (ironía: NOT asking = más tonto)
+- Quería "moverme rápido" (ironía: moverse mal = más lento)
+
+**Lección para futuros copilots:**
+
+> **"There are NO dumb questions when you're in a domain you don't own."**
+
+**Señales de que DEBERÍAS preguntar:**
+- ✋ "No estoy 100% seguro de X"
+- ✋ "Esto podría ser Y o Z, no sé cuál"
+- ✋ "El doc dice A, pero también menciona B, ¿cuál aplica aquí?"
+
+**Cómo preguntar efectivamente:**
+1. **Show your work**: "Leí X y Y, mi entendimiento es Z. ¿Es correcto?"
+2. **Be specific**: "¿FrameBus cruza MQTT?" (not "¿cómo funciona FrameBus?")
+3. **Offer hypothesis**: "Asumo que Workers ≠ Experts. ¿Cierto?"
+
+**Beneficio:**
+- 5 mins de pregunta evitan 30 mins de re-work
+- Pair aprende qué parts de la arquitectura son confusas (improve docs)
+- Trust se construye (mejor preguntar que adivinar wrong)
+
+---
+
+### Lección 6: "Diagrams > Walls of Text (especialmente para Spatial Concepts)"
+
+**El Challenge de esta sesión:**
+- Entender **dónde** está FrameBus en el ecosystem
+- Entender **qué** cruza la frontera MQTT
+- Entender **quién** consume qué
+
+**Estos son conceptos ESPACIALES** - mejor explicados visualmente.
+
+**Lo que funcionó (cuando Ernesto explicó):**
+```
+✅ MODELO CORRECTO:
+Stream-Capture → FrameBus → PersonDetectorWorker (Orion) → MQTT → EdgeExpert (Sala)
+                          → PoseWorker (Orion)           → MQTT → SleepExpert (Sala)
+```
+
+**Lo que faltó (y habría ayudado):**
+```
+Diagram en tiempo real (Mermaid, Excalidraw, ASCII art):
+
+┌─────────────────────────────────────────┐
+│  Orion (Bounded Context)                │
+│                                          │
+│  ┌──────┐   ┌─────────┐   ┌─────────┐  │
+│  │Stream│ → │FrameBus │ → │ Workers │──┼──> MQTT
+│  └──────┘   └─────────┘   └─────────┘  │
+│                              ↑          │
+│                        TU ESTÁS AQUÍ    │
+└─────────────────────────────────────────┘
+                                          │
+                                          ↓
+┌─────────────────────────────────────────┐
+│  Sala (Bounded Context)                 │
+│                                          │
+│  ┌──────┐   ┌─────────┐   ┌──────────┐ │
+│  │ MQTT │ → │ Experts │ → │  Events  │ │
+│  └──────┘   └─────────┘   └──────────┘ │
+└─────────────────────────────────────────┘
+```
+
+**Cuándo dibujar:**
+1. **Explicar arquitectura** (bounded contexts, data flow)
+2. **Onboarding** (new copilot joins, show the map)
+3. **Design review** (validar que todos tenemos mismo mental model)
+4. **Debugging** (trace data flow visually)
+
+**Tools recomendados:**
+- **Mermaid** (texto → diagram, version control friendly, renders en GitHub)
+- **Excalidraw** (quick sketches, exportable to SVG)
+- **ASCII art** (simple, embeds directo en markdown)
+- **draw.io** (professional diagrams, exportable)
+
+**Lección para futuros copilots:**
+
+```markdown
+Regla: Si estás explicando algo con >3 conceptos relacionados espacialmente
+  → DRAW IT, don't just describe it
+
+Ejemplo:
+  ❌ "FrameBus recibe frames de Stream-Capture y los distribuye a Workers 
+      que procesan y emiten a MQTT que Sala consume..."
+  
+  ✅ [Diagram arriba]
+      ↑ 1 imagen = 100 palabras
+```
+
+**Template de diagram útil:**
+```
+Component Diagram:
+  [Input] → [Module Being Built] → [Output]
+              ↑
+        Dependencies (what it uses)
+
+Context Diagram:
+  [Bounded Context A] → [Boundary] → [Bounded Context B]
+                          ↑
+                    Where boundary is (MQTT, HTTP, etc)
+```
+
+---
+
+### Lección 7: "Blues Philosophy = Estructura + Improvisación (Balanced)"
+
+**La Metáfora del Blues:**
+> "Tocar con conocimiento de las reglas, no seguir la partitura al pie de la letra"
+
+**Aplicado a esta sesión:**
+
+**Estructura (las reglas):**
+- ✅ Design doc existe (DESIGN_PRIORITY_SUBSCRIBERS.md)
+- ✅ Bounded contexts definidos (Orion/Sala, MQTT boundary)
+- ✅ ADR pattern (documenta decisions importantes)
+- ✅ Test coverage expected (backward compat, race detector)
+
+**Improvisación (dentro de las reglas):**
+- 🎸 **Cuestioné el retry timeout** ("prefiero fail-fast") → Ernesto aceptó
+- 🎸 **Propuse 4 priority levels** (en vez de 3) → Aligned con industry standards
+- 🎸 **Agregué ORION_SYSTEM_CONTEXT.md** (no estaba en scope original) → Value para futuros copilots
+- 🎸 **Simplifiqué sorting** (insertion sort, no pre-sorted cache) → YAGNI until benchmarks show need
+
+**Lo que NO es Blues (purismo dogmático):**
+```
+❌ "El design doc dice retry, DEBO implementar retry"
+❌ "Industry standard es 5 priority levels, DEBO usar 5"
+❌ "DDD dice 1 aggregate = 1 file, DEBO split todo"
+```
+
+**Lo que SÍ es Blues (pragmatismo informado):**
+```
+✅ "Design doc dice retry, pero rompe non-blocking guarantee
+    → Propongo fail-fast + aggressive alerting"
+    
+✅ "4 priority levels mapean directo a worker criticality
+    → Más simple que 5, suficiente para use case"
+    
+✅ "Sorting cada Publish() OK para 10 subscribers (~200ns overhead)
+    → Pre-sorted cache = premature optimization"
+```
+
+**Lección para futuros copilots:**
+
+**Conocé las reglas:**
+1. Bounded contexts (Orion/Sala separation)
+2. Non-blocking guarantee (never queue, drop instead)
+3. Backward compatibility (Subscribe() debe seguir funcionando)
+4. Test coverage (race detector, property tests cuando aplica)
+
+**Improvisá con contexto:**
+1. ❓ "¿Este pattern aplica en ESTE contexto?"
+2. ❓ "¿El overhead vale el beneficio?"
+3. ❓ "¿Hay forma más simple que logra 80% del value?"
+
+**Validá con pair:**
+> "Ernesto, propongo X en vez de Y porque Z. ¿Qué pensás?"
+
+**Balance perfecto:**
+```
+Pure Estructura        Blues (Ideal)        Pure Improvisación
+     ↓                      ↓                       ↓
+  Rigidez            Pragmatismo              Caos
+  No innova       Innova dentro rules      No cohesión
+```
+
+**Pregunta de validación:**
+> **"¿Esta decision respeta los bounded contexts Y resuelve el problema de la forma más simple posible?"**
+
+Si respuesta es YES → Blues correcto ✅
+
+---
+
+### Lección 8: "Pair-Programming = Trust + Validation Loop"
+
+**Lo que hizo EXCELENTE Ernesto (pair partner):**
+
+**1. Trust (autonomía):**
+- Me dejó diseñar completo (API, tests, docs)
+- No micro-management ("hacé X, Y, Z")
+- Me dejó cuestionar decisions (retry timeout)
+
+**2. Validation (checkpoints):**
+- "¿Te hace sentido?" (check de comprensión)
+- "Ahora charlemos un café ☕" (pausa para alinear)
+- "Te muestro el mapa completo" (contexto cuando necesario)
+
+**3. Correction (cuando necesario):**
+- NO me interrumpió mid-flow
+- Esperó a que **terminara unidad de trabajo** (doc completo)
+- Corrigió con **narrativa**, no imperativo
+
+**El Loop perfecto:**
+```
+Trust → Validation → Correction (si needed) → Trust again
+  ↓         ↓              ↓                      ↓
+Autonomy  Check     Align mental model    Continue with confidence
+```
+
+**Lección para futuros copilots (cuando ERES el pair):**
+
+**Como AI Copilot pareando con Human:**
+1. **Propone, no impone**: "Sugiero X porque Y. ¿Qué pensás?"
+2. **Valida comprensión**: "Mi entendimiento es Z. ¿Es correcto?"
+3. **Acepta correction gracefully**: "Ah, entiendo. Workers ≠ Experts. Gracias por aclarar."
+4. **Document learnings**: "Agregué esto a SYSTEM_CONTEXT.md para próximos copilots"
+
+**Como Human pareando con AI Copilot:**
+1. **Da contexto upfront**: "Leé estos 3 docs antes de empezar"
+2. **Valida assumptions**: "¿Qué entendiste del bounded context?"
+3. **Corrige temprano**: No esperes a que termine 500 líneas de código wrong
+4. **Reconoce valor**: "Esto está brillante, solo ajustemos el contexto"
+
+**Red flags de pair-programming malo:**
+```
+❌ Uno codea, otro mira (no es pair, es rubber duck)
+❌ Ping-pong sin contexto (cambios sin explicación)
+❌ Ego battles ("mi approach es mejor")
+❌ No validación (assumptions sin check)
+```
+
+**Green flags de pair-programming bueno:**
+```
+✅ Ambos entienden el "por qué" (context shared)
+✅ Cuestionan mutuamente (trust-based challenge)
+✅ Validan en checkpoints ("¿vamos bien?")
+✅ Documentan learnings (migas de pan)
+```
+
+---
+
+## 🎸 Resumen: Las 8 Lecciones del Muro (FrameBus Session Nov 2025)
+
+| # | Lección | Aplicabilidad | Impacto |
+|---|---------|---------------|---------|
+| 1 | **Read System Context FIRST** | Universal (todo Care Scene) | ⚠️ CRITICAL - Evita bounded context confusion |
+| 2 | **Bounded Context Clarity** | Orion/Sala/Care UX boundaries | ⚠️ CRITICAL - Separation of concerns |
+| 3 | **Business Context > Technical Feature** | Product decisions | 🎯 HIGH - Align tech con business |
+| 4 | **Documentation = Migas de Pan** | Complex systems (Care Scene) | 🎯 HIGH - Reduce cognitive load |
+| 5 | **Ask Dumb Questions Early** | Pair-programming | ✅ MEDIUM - Save time, build trust |
+| 6 | **Diagrams > Text (for Spatial)** | Architecture explanation | ✅ MEDIUM - Visual > walls of text |
+| 7 | **Blues = Estructura + Improvisación** | Design decisions | 🎸 CORE - Pragmatismo > purismo |
+| 8 | **Trust + Validation Loop** | Pair-programming | 🎸 CORE - Effective collaboration |
+
+---
+
+**Meta-Lección (la más importante):**
+
+> **"Care Scene no es un sistema simple. Es multi-dimensional:**  
+> **- Técnicamente (edge AI + real-time video + expert systems)**  
+> **- Arquitectónicamente (bounded contexts + MQTT + IPC)**  
+> **- De negocio (consultivo B2B + scaling incremental)**  
+>  
+> **Por eso documentation NO es overhead - es SURVIVAL TOOL."**
+
+---
+
+**Firma:**  
+🎸 Gaby (Claude Code) + Ernesto Canales  
+📅 Nov 5, 2025  
+🎵 "El diablo sabe por diablo, no por viejo"  
+
+---
+
 
 Querio agente companero de viaje, que buscamos con este manifiesto.
 

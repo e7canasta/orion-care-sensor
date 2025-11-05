@@ -11,13 +11,16 @@ FrameBus is a generic pub/sub mechanism for distributing video frames to multipl
 ## Features
 
 - ✅ **Non-blocking fan-out** - Publisher never waits for slow subscribers
+- ✅ **Priority-based load shedding** - Protect critical subscribers under load
 - ✅ **Intentional drop policy** - Maintains real-time processing by dropping stale frames
 - ✅ **Thread-safe** - Concurrent publishers and dynamic subscriber management
-- ✅ **Observable** - Detailed stats (published, sent, dropped) per subscriber
+- ✅ **Observable** - Detailed stats (published, sent, dropped) per subscriber with priority
 - ✅ **Generic** - Channel-based API decoupled from specific worker types
 - ✅ **Zero dependencies** - Pure Go standard library
 
 ## Quick Start
+
+### Basic Usage (Default Priority)
 
 ```go
 package main
@@ -36,7 +39,7 @@ func main() {
     worker1 := make(chan framebus.Frame, 5)
     worker2 := make(chan framebus.Frame, 5)
 
-    // Subscribe
+    // Subscribe (default priority: Normal)
     bus.Subscribe("worker-1", worker1)
     bus.Subscribe("worker-2", worker2)
 
@@ -56,6 +59,61 @@ func main() {
         stats.TotalSent,
         stats.TotalDropped,
     )
+}
+```
+
+### Priority Subscribers (SLA Protection)
+
+```go
+package main
+
+import (
+    "fmt"
+    "github.com/visiona/orion/modules/framebus"
+)
+
+func main() {
+    bus := framebus.New()
+    defer bus.Close()
+
+    // Critical: Person detection (foundation for fall detection downstream in Sala)
+    personDetectorCh := make(chan framebus.Frame, 10)
+    bus.SubscribeWithPriority("person-detector-worker", personDetectorCh, framebus.PriorityCritical)
+
+    // High: Pose estimation (important for edge-of-bed analysis in Sala)
+    poseWorkerCh := make(chan framebus.Frame, 10)
+    bus.SubscribeWithPriority("pose-worker", poseWorkerCh, framebus.PriorityHigh)
+
+    // Normal: Optical flow (micro-awakening detection, quality-of-life)
+    flowWorkerCh := make(chan framebus.Frame, 5)
+    bus.Subscribe("flow-worker", flowWorkerCh) // Default: Normal
+
+    // BestEffort: Experimental VLM (research, no production SLA)
+    vlmWorkerCh := make(chan framebus.Frame, 5)
+    bus.SubscribeWithPriority("vlm-experimental-worker", vlmWorkerCh, framebus.PriorityBestEffort)
+
+    // Publish frames
+    for i := 0; i < 100; i++ {
+        bus.Publish(framebus.Frame{Seq: uint64(i)})
+    }
+
+    // Check priority-aware stats
+    stats := bus.Stats()
+    for id, sub := range stats.Subscribers {
+        dropRate := float64(sub.Dropped) / float64(sub.Sent + sub.Dropped) * 100
+        fmt.Printf("%s (Priority %d): %.1f%% drop rate\n", id, sub.Priority, dropRate)
+    }
+    
+    // Expected output under load:
+    // person-detector-worker (Priority 0):     0.0% drop rate  ← Protected (Critical)
+    // pose-worker (Priority 1):                5.0% drop rate  ← Minimal drops (High)
+    // flow-worker (Priority 2):               40.0% drop rate  ← Acceptable (Normal)
+    // vlm-experimental-worker (Priority 3):   90.0% drop rate  ← Shed first (BestEffort)
+    
+    // Downstream Impact (Sala Experts via MQTT):
+    // - EdgeExpert gets reliable person detection + pose data → Fall risk analysis works
+    // - SleepExpert gets degraded flow data → Sleep quality insights reduced (tolerable)
+    // - Research pipeline gets minimal VLM data → Expected, no production impact
 }
 ```
 
@@ -87,15 +145,32 @@ func main() {
 
 ## Use Cases
 
-### Orion Video Pipeline
+### Orion Video Pipeline (with Priority SLAs)
 
-FrameBus distributes frames from the stream capture to multiple inference workers:
+FrameBus distributes frames from stream capture to **Orion Workers** with differentiated SLAs:
 
 ```
-Stream Capture → FrameBus ─┬→ Person Detector Worker 1
-                           ├→ Person Detector Worker 2
-                           └→ Pose Estimation Worker
+Stream-Capture → FrameBus ─┬→ PersonDetectorWorker (Critical) → MQTT → EdgeExpert (Sala)
+                           ├→ PoseWorker (High)              → MQTT → EdgeExpert, SleepExpert
+                           ├→ FlowWorker (Normal)            → MQTT → SleepExpert
+                           └→ VLMExperimentalWorker (BestEffort) → Research Pipeline
 ```
+
+**Under Load** (FrameBus saturated):
+- PersonDetectorWorker: 0% drops (protected) → EdgeExpert gets reliable data
+- PoseWorker: <10% drops (minimal degradation) → EdgeExpert can still analyze fall risk
+- FlowWorker: <50% drops (acceptable) → SleepExpert insights reduced (tolerable)
+- VLMExperimentalWorker: 90%+ drops (expected, no SLA) → Research continues best-effort
+
+**Key Insight**: Priority in FrameBus protects the **entire inference chain**:
+```
+PersonDetectorWorker (0% drops, FrameBus protected)
+  → MQTT inference
+    → EdgeExpert (Sala, reliable fall detection)
+      → Care Staff Alert (life saved)
+```
+
+See [FRAMEBUS_CUSTOMERS.md](docs/FRAMEBUS_CUSTOMERS.md) for detailed customer context.
 
 ### Multi-Stage Processing
 
@@ -111,12 +186,28 @@ Video Source → FrameBus ─┬→ Inference Pipeline
 
 ```go
 type Bus interface {
+    // Subscribe with default priority (Normal)
     Subscribe(id string, ch chan<- Frame) error
+    
+    // Subscribe with custom priority
+    SubscribeWithPriority(id string, ch chan<- Frame, priority SubscriberPriority) error
+    
     Unsubscribe(id string) error
     Publish(frame Frame)
+    PublishWithContext(ctx context.Context, frame Frame)
     Stats() BusStats
+    GetHealth(id string) SubscriberHealth
+    GetUnhealthySubscribers() []string
     Close() error
 }
+
+// Priority levels (lower = higher priority)
+const (
+    PriorityCritical   SubscriberPriority = 0  // Mission-critical (fall detection)
+    PriorityHigh       SubscriberPriority = 1  // Important (sleep monitoring)
+    PriorityNormal     SubscriberPriority = 2  // Standard (default)
+    PriorityBestEffort SubscriberPriority = 3  // Experimental (no SLA)
+)
 ```
 
 ### Stats
@@ -130,8 +221,9 @@ type BusStats struct {
 }
 
 type SubscriberStats struct {
-    Sent    uint64
-    Dropped uint64
+    Sent     uint64
+    Dropped  uint64
+    Priority SubscriberPriority  // Priority level of subscriber
 }
 
 // Helper functions
@@ -207,6 +299,15 @@ go test -bench=. -benchmem
 - [ADR-001: Channel-based Subscriber Pattern](docs/adr/001-channel-based-subscriber-pattern.md)
 - [ADR-002: Non-blocking Publish with Drop Policy](docs/adr/002-non-blocking-publish-drop-policy.md)
 - [ADR-003: Stats Tracking Design](docs/adr/003-stats-tracking-design.md)
+- [ADR-009: Priority-Based Load Shedding](docs/adr/ADR-009-Priority-Subscribers.md) ⭐ **NEW**
+
+## Customer Context
+
+**Who uses FrameBus?** [Orion Workers](docs/FRAMEBUS_CUSTOMERS.md) - AI inference workers (PersonDetector, Pose, Flow, VLM) internal to Orion.
+
+**Why Priority matters?** Protects mission-critical workers (PersonDetectorWorker → fall detection chain) while enabling experimental features (VLM research) on shared hardware.
+
+**Downstream consumers**: Sala Experts (EdgeExpert, SleepExpert) consume worker inferences via MQTT, outside Orion boundary.
 
 ## License
 

@@ -830,7 +830,7 @@ TODO: Document error classification and remediation
 
 **Related Documentation:**
 - [CLAUDE.md](../CLAUDE.md) - AI companion guide with quick start, troubleshooting, and development workflow
-- [C4_MODEL.md](C4_MODEL.md) - C4 architecture diagrams (Context, Container, Component, Code)
+- [C4_MODEL.md](modules/stream-capture/docs/C4_MODEL.md) - C4 architecture diagrams (Context, Container, Component, Code)
 - [adr/](adr/) - Architecture Decision Records (formal ADRs)
 - [TECHNICAL_REVIEW_2025-01-04.md](2025-11-04%20TECHNICAL_REVIEW_2025-01-04.md) - Design review analysis (9.2/10 score)
 - [QUICK_WINS_SUMMARY.md](2025-11-04%20QUICK_WINS_SUMMARY.md) - Implementation summary (v2.1 improvements)

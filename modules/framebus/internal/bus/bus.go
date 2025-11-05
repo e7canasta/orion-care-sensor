@@ -65,6 +65,11 @@ type SubscriberStats struct {
 	// Dropped is the number of frames dropped due to full channel
 	Dropped uint64
 
+	// CriticalDropped is the number of frames dropped for Critical subscribers.
+	// This should normally be 0 - non-zero values indicate system overload
+	// and should trigger alerts (critical worker cannot keep up even with retry).
+	CriticalDropped uint64
+
 	// Priority is the subscriber's priority level
 	Priority SubscriberPriority
 }
@@ -235,8 +240,9 @@ type subscriberEntry struct {
 
 // subscriberStats holds internal atomic counters.
 type subscriberStats struct {
-	sent    atomic.Uint64
-	dropped atomic.Uint64
+	sent            atomic.Uint64
+	dropped         atomic.Uint64
+	criticalDropped atomic.Uint64
 }
 
 // bus is the concrete implementation of Bus.
@@ -246,17 +252,27 @@ type bus struct {
 	stats       map[string]*subscriberStats
 	closed      bool
 
+	// Lazy-rebuild optimization: Pre-sorted cache of subscribers by priority.
+	// Cache is rebuilt lazily on first Publish() after Subscribe/Unsubscribe.
+	// This optimizes the hot path (Publish) at the cost of cold path (Subscribe).
+	sortedCache []sortedSubscriber
+	cacheDirty  atomic.Bool // true = cache needs rebuild
+
 	// Global counter (atomic - no lock needed in Publish)
 	totalPublished atomic.Uint64
 }
 
 // New creates a new FrameBus.
 func New() Bus {
-	return &bus{
+	b := &bus{
 		subscribers: make(map[string]*subscriberEntry),
 		stats:       make(map[string]*subscriberStats),
+		sortedCache: make([]sortedSubscriber, 0),
 		closed:      false,
 	}
+	// Cache starts empty and clean (no subscribers yet)
+	b.cacheDirty.Store(false)
+	return b
 }
 
 // Subscribe registers a channel with default (Normal) priority.
@@ -287,6 +303,9 @@ func (b *bus) SubscribeWithPriority(id string, ch chan<- Frame, priority Subscri
 	}
 	b.stats[id] = &subscriberStats{}
 
+	// Mark cache as dirty - will be rebuilt lazily on next Publish()
+	b.cacheDirty.Store(true)
+
 	return nil
 }
 
@@ -306,13 +325,20 @@ func (b *bus) Unsubscribe(id string) error {
 	delete(b.subscribers, id)
 	delete(b.stats, id)
 
+	// Mark cache as dirty - will be rebuilt lazily on next Publish()
+	b.cacheDirty.Store(true)
+
 	return nil
 }
 
 // Publish sends frame to all subscribers (non-blocking).
 //
-// Subscribers are processed in priority order (Critical first, BestEffort last).
+// Subscribers are processed in priority order (Critical first, BestEffor last).
 // Under load, lower-priority subscribers drop frames before higher-priority ones.
+//
+// The subscriber cache is rebuilt lazily on first Publish() after Subscribe/Unsubscribe.
+// This implements "streaming semantics" where configuration changes apply eventually,
+// not necessarily on the very next frame (t+1, t+2, ... t+m).
 //
 // For each subscriber:
 //   - If channel has space: frame is sent, Sent counter incremented
@@ -324,24 +350,57 @@ func (b *bus) Publish(frame Frame) {
 	b.totalPublished.Add(1)
 
 	b.mu.RLock()
-	defer b.mu.RUnlock()
 
 	if b.closed {
+		b.mu.RUnlock()
 		panic("publish on closed bus")
 	}
 
-	// Sort subscribers by priority (Critical first)
-	sorted := b.sortSubscribersByPriority()
+	// Lazy rebuild: Check if cache needs rebuild (streaming semantics)
+	if b.cacheDirty.Load() {
+		// Cache is dirty - need exclusive lock to rebuild
+		b.mu.RUnlock()
+		b.mu.Lock()
 
-	// Distribute to subscribers in priority order
-	for _, sub := range sorted {
+		// Double-check: another goroutine might have rebuilt it
+		if b.cacheDirty.Load() {
+			// Smart rebuild: Only sort if priorities are mixed
+			if b.needsSorting() {
+				b.sortedCache = b.sortSubscribersByPriority()
+			} else {
+				// All same priority (or 0-1 subscribers): no sorting needed
+				b.sortedCache = b.subscribersToSlice()
+			}
+			b.cacheDirty.Store(false)
+		}
+
+		b.mu.Unlock()
+		b.mu.RLock()
+	}
+	defer b.mu.RUnlock()
+
+	// Use pre-sorted cache (O(N) always, no sorting in hot path)
+	for _, sub := range b.sortedCache {
 		select {
 		case sub.entry.ch <- frame:
 			// Frame sent successfully
 			b.stats[sub.id].sent.Add(1)
 		default:
-			// Channel full - drop frame
-			b.stats[sub.id].dropped.Add(1)
+			// Channel full - apply priority logic
+			if sub.entry.priority == PriorityCritical {
+				// Critical subscriber: retry with timeout
+				if b.retryCritical(sub.entry.ch, frame) {
+					// Retry succeeded
+					b.stats[sub.id].sent.Add(1)
+				} else {
+					// Even critical dropped after timeout (alert!)
+					b.stats[sub.id].dropped.Add(1)
+					b.stats[sub.id].criticalDropped.Add(1)
+				}
+			} else {
+				// Non-critical: drop immediately
+				b.stats[sub.id].dropped.Add(1)
+			}
 		}
 	}
 }
@@ -357,6 +416,9 @@ func (b *bus) Publish(frame Frame) {
 // Subscribers are processed in priority order (Critical first, BestEffort last).
 // Under load, lower-priority subscribers drop frames before higher-priority ones.
 //
+// The subscriber cache is rebuilt lazily on first Publish() after Subscribe/Unsubscribe.
+// This implements "streaming semantics" where configuration changes apply eventually.
+//
 // For each subscriber:
 //   - If channel has space: frame is sent, Sent counter incremented
 //   - If channel is full: frame is dropped, Dropped counter incremented
@@ -370,24 +432,57 @@ func (b *bus) PublishWithContext(ctx context.Context, frame Frame) {
 	b.totalPublished.Add(1)
 
 	b.mu.RLock()
-	defer b.mu.RUnlock()
 
 	if b.closed {
+		b.mu.RUnlock()
 		panic("publish on closed bus")
 	}
 
-	// Sort subscribers by priority (Critical first)
-	sorted := b.sortSubscribersByPriority()
+	// Lazy rebuild: Check if cache needs rebuild (streaming semantics)
+	if b.cacheDirty.Load() {
+		// Cache is dirty - need exclusive lock to rebuild
+		b.mu.RUnlock()
+		b.mu.Lock()
 
-	// Distribute to subscribers in priority order
-	for _, sub := range sorted {
+		// Double-check: another goroutine might have rebuilt it
+		if b.cacheDirty.Load() {
+			// Smart rebuild: Only sort if priorities are mixed
+			if b.needsSorting() {
+				b.sortedCache = b.sortSubscribersByPriority()
+			} else {
+				// All same priority (or 0-1 subscribers): no sorting needed
+				b.sortedCache = b.subscribersToSlice()
+			}
+			b.cacheDirty.Store(false)
+		}
+
+		b.mu.Unlock()
+		b.mu.RLock()
+	}
+	defer b.mu.RUnlock()
+
+	// Use pre-sorted cache (O(N) always, no sorting in hot path)
+	for _, sub := range b.sortedCache {
 		select {
 		case sub.entry.ch <- frame:
 			// Frame sent successfully
 			b.stats[sub.id].sent.Add(1)
 		default:
-			// Channel full - drop frame
-			b.stats[sub.id].dropped.Add(1)
+			// Channel full - apply priority logic
+			if sub.entry.priority == PriorityCritical {
+				// Critical subscriber: retry with timeout
+				if b.retryCritical(sub.entry.ch, frame) {
+					// Retry succeeded
+					b.stats[sub.id].sent.Add(1)
+				} else {
+					// Even critical dropped after timeout (alert!)
+					b.stats[sub.id].dropped.Add(1)
+					b.stats[sub.id].criticalDropped.Add(1)
+				}
+			} else {
+				// Non-critical: drop immediately
+				b.stats[sub.id].dropped.Add(1)
+			}
 		}
 	}
 }
@@ -412,6 +507,7 @@ func (b *bus) Stats() BusStats {
 	for id, stats := range b.stats {
 		sent := stats.sent.Load()
 		dropped := stats.dropped.Load()
+		criticalDropped := stats.criticalDropped.Load()
 
 		totalSent += sent
 		totalDropped += dropped
@@ -423,9 +519,10 @@ func (b *bus) Stats() BusStats {
 		}
 
 		result.Subscribers[id] = SubscriberStats{
-			Sent:     sent,
-			Dropped:  dropped,
-			Priority: priority,
+			Sent:            sent,
+			Dropped:         dropped,
+			CriticalDropped: criticalDropped,
+			Priority:        priority,
 		}
 	}
 
@@ -512,6 +609,63 @@ type sortedSubscriber struct {
 	entry *subscriberEntry
 }
 
+// needsSorting determines if sorting by priority is necessary.
+//
+// Returns false (no sorting needed) if:
+//   - 0 or 1 subscribers (no order to enforce)
+//   - All subscribers have the same priority (order irrelevant)
+//
+// Returns true (sorting needed) if:
+//   - 2+ subscribers with mixed priorities (order affects drop distribution)
+//
+// This optimization is critical for Orion's dynamic worker articulation:
+//   - Sleep scene: 3 workers, all Normal → no sorting (save 125ns)
+//   - Alert scene: 2 workers, both Critical → no sorting (save 125ns)
+//   - Normal scene: Mixed priorities → sorting required
+//
+// Time complexity: O(N) linear scan
+// Called within Lock (rebuild path), not hot path.
+func (b *bus) needsSorting() bool {
+	n := len(b.subscribers)
+
+	if n <= 1 {
+		return false // 0 or 1 subscriber: no order to enforce
+	}
+
+	// Scan all subscribers to check if priorities are uniform
+	var firstPriority SubscriberPriority
+	firstSeen := false
+
+	for _, entry := range b.subscribers {
+		if !firstSeen {
+			firstPriority = entry.priority
+			firstSeen = true
+		} else if entry.priority != firstPriority {
+			return true // Mixed priorities found → sorting needed
+		}
+	}
+
+	return false // All same priority → sorting not needed
+}
+
+// subscribersToSlice converts subscriber map to slice without sorting.
+// Used when all subscribers have the same priority (sorting is unnecessary).
+//
+// Time complexity: O(N) map iteration
+// Called within Lock (rebuild path), not hot path.
+func (b *bus) subscribersToSlice() []sortedSubscriber {
+	slice := make([]sortedSubscriber, 0, len(b.subscribers))
+
+	for id, entry := range b.subscribers {
+		slice = append(slice, sortedSubscriber{
+			id:    id,
+			entry: entry,
+		})
+	}
+
+	return slice
+}
+
 // sortSubscribersByPriority returns subscribers sorted by priority.
 // Lower priority value = higher priority (Critical=0 first, BestEffort=3 last).
 //
@@ -535,6 +689,24 @@ func (b *bus) sortSubscribersByPriority() []sortedSubscriber {
 	}
 
 	return sorted
+}
+
+// retryCritical attempts to send frame to a critical subscriber with timeout.
+// Returns true if sent successfully, false if dropped after timeout.
+//
+// This method blocks for up to 1ms, providing critical subscribers with
+// a brief window to process their queue before dropping the frame.
+//
+// Called only for PriorityCritical subscribers when initial send fails.
+func (b *bus) retryCritical(ch chan<- Frame, frame Frame) bool {
+	timeout := 1 * time.Millisecond
+
+	select {
+	case ch <- frame:
+		return true // Sent successfully within timeout
+	case <-time.After(timeout):
+		return false // Timeout - drop frame
+	}
 }
 
 // Close stops the bus and prevents further operations.

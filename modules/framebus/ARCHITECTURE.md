@@ -568,6 +568,185 @@ Overall drop rate: ~10-20% (depends on burst frequency)
 
 ---
 
+## Priority-Based Load Shedding with Critical Retry
+
+### Philosophy: Protect Critical Workloads Under Load
+
+FrameBus extends the basic drop policy with **priority-based load shedding** to protect mission-critical subscribers during system overload. The principle:
+
+> "Under load, drop frames to lower-priority subscribers first. Critical subscribers get retry protection."
+
+This extension enables **SLA differentiation** where business-critical workloads (e.g., fall detection, medical alerts) are protected while experimental or best-effort workloads (e.g., research models, telemetry) absorb the load shedding.
+
+### Priority Levels
+
+```go
+const (
+    PriorityCritical    SubscriberPriority = 0  // Never drop if possible (retry)
+    PriorityHigh        SubscriberPriority = 1  // Drop only under severe load
+    PriorityNormal      SubscriberPriority = 2  // Default (backward compatible)
+    PriorityBestEffort  SubscriberPriority = 3  // Drop first under any load
+)
+```
+
+### Critical Retry Logic
+
+When a **PriorityCritical** subscriber's channel is full, FrameBus performs a **1ms timeout retry** before dropping:
+
+```go
+// Non-critical: Drop immediately
+select {
+case ch <- frame:
+    sent.Add(1)
+default:
+    dropped.Add(1)  // ❌ Drop
+}
+
+// Critical: Retry with timeout
+select {
+case ch <- frame:
+    sent.Add(1)
+default:
+    // Channel full - retry with timeout
+    if retryCritical(ch, frame) {
+        sent.Add(1)              // ✅ Retry succeeded
+    } else {
+        dropped.Add(1)           // ❌ Timeout
+        criticalDropped.Add(1)   // 🚨 Alert metric
+    }
+}
+```
+
+**Key Properties:**
+- **Blocking window:** Up to 1ms (configurable in future)
+- **Fallback:** Still drops if retry times out
+- **Observability:** `CriticalDropped` metric tracks retry failures
+
+**Sources:** [internal/bus/bus.go#L546-L562](internal/bus/bus.go#L546-L562)
+
+### Retry Mechanism
+
+```mermaid
+sequenceDiagram
+    participant P as Publish()
+    participant B as FrameBus
+    participant C as Critical Subscriber Channel (Full)
+
+    Note over P: Frame for critical subscriber
+    P->>B: Publish(frame)
+
+    B->>C: select { case ch <- frame }
+    Note over C: ❌ Buffer full (immediate check)
+    C-->>B: Would block (default case)
+
+    Note over B: Priority == Critical?
+
+    rect rgba(220, 53, 69, 0.1)
+        Note over B: retryCritical(ch, frame)
+        B->>C: select with 1ms timeout
+
+        alt Subscriber drains within 1ms
+            Note over C: ✅ Space available
+            C-->>B: Frame sent
+            Note over B: sent.Add(1)
+        else Timeout after 1ms
+            Note over C: ❌ Still full
+            C-->>B: Timeout
+            Note over B: dropped.Add(1)<br/>criticalDropped.Add(1)
+        end
+    end
+
+    B-->>P: Return
+```
+
+### Load Shedding Sequence
+
+Frames are distributed to subscribers **in priority order** (Critical first, BestEffort last):
+
+```mermaid
+graph LR
+    START[Frame Published]
+    SORT[Sort by Priority<br/>Critical → High → Normal → BestEffort]
+
+    C[Critical Subscriber]
+    H[High Subscriber]
+    N[Normal Subscriber]
+    B[BestEffort Subscriber]
+
+    START --> SORT
+    SORT --> C
+    C --> H
+    H --> N
+    N --> B
+
+    style C fill:#dc3545,color:#fff,stroke:#bd2130
+    style H fill:#fd7e14,stroke:#e8590c
+    style N fill:#ffc107,stroke:#e0a800
+    style B fill:#6c757d,color:#fff,stroke:#5a6268
+```
+
+**Ordering guarantee:** Under simultaneous load, Critical subscribers receive frames before BestEffort subscribers have a chance to process, naturally biasing the distribution.
+
+### CriticalDropped Metric
+
+The `CriticalDropped` counter is a **critical alert signal**:
+
+```go
+type SubscriberStats struct {
+    Sent            uint64  // Frames successfully sent
+    Dropped         uint64  // Total frames dropped
+    CriticalDropped uint64  // 🚨 Dropped despite retry (Critical only)
+    Priority        SubscriberPriority
+}
+```
+
+**Interpretation:**
+- `CriticalDropped = 0` → ✅ Normal operation (Critical worker keeping up)
+- `CriticalDropped > 0` → 🚨 **Alert condition** (Critical worker cannot keep up even with retry protection)
+
+**Alerting Example:**
+```go
+stats := bus.Stats()
+for id, sub := range stats.Subscribers {
+    if sub.Priority == PriorityCritical && sub.CriticalDropped > 0 {
+        // 🚨 CRITICAL ALERT
+        log.Error("Critical worker dropping frames despite retry",
+            "worker", id,
+            "criticalDropped", sub.CriticalDropped,
+            "dropRate", float64(sub.Dropped)/float64(sub.Sent+sub.Dropped))
+
+        // Trigger remediation: restart worker, scale up resources, etc.
+        alerting.Critical("framebus_critical_worker_saturated", id)
+    }
+}
+```
+
+### Performance Impact
+
+| Scenario | Latency Impact | Frequency |
+|----------|---------------|-----------|
+| **Normal (no drops)** | 0 ns | 99.9% of operations |
+| **Non-critical drop** | 0 ns (immediate drop) | Depends on load |
+| **Critical retry success** | +50-500 μs (subscriber drains) | Rare (brief backlogs) |
+| **Critical retry timeout** | +1ms (full timeout) | Very rare (saturation) |
+
+**Expected overhead:** ~0 ns in practice, as Critical subscribers are typically sized to avoid drops.
+
+**Sources:** [internal/bus/bus.go#L337-L361](internal/bus/bus.go#L337-L361), [DESIGN_PRIORITY_SUBSCRIBERS.md](DESIGN_PRIORITY_SUBSCRIBERS.md)
+
+### Design Decisions
+
+| Decision | Rationale | Trade-off |
+|----------|-----------|-----------|
+| **1ms timeout** | Balance between retry protection and Publish() latency | Hardcoded (not configurable yet - YAGNI) |
+| **Retry only Critical** | Avoids complexity for common cases | High/Normal/BestEffort drop immediately |
+| **Sorting every Publish()** | Simple implementation, works for 2-100 subscribers | O(N log N) overhead (~200ns for 10 subscribers) |
+| **No pre-sorted cache** | Simpler code, no cache invalidation complexity | Could optimize if N > 100 |
+
+**Future optimization:** If subscriber count exceeds 100, consider caching sorted order and invalidating on Subscribe/Unsubscribe.
+
+---
+
 ## Performance Characteristics
 
 ### Latency Analysis

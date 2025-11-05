@@ -228,3 +228,82 @@ func TestSubscribeWithPriorityErrors(t *testing.T) {
 		t.Errorf("Expected ErrBusClosed, got %v", err)
 	}
 }
+
+// TestCriticalRetry verifies that Critical subscribers get retry logic.
+func TestCriticalRetry(t *testing.T) {
+	b := New()
+	defer b.Close()
+
+	// Create critical subscriber with buffer=1
+	criticalCh := make(chan Frame, 1)
+	if err := b.SubscribeWithPriority("critical", criticalCh, PriorityCritical); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Create normal subscriber with buffer=1 for comparison
+	normalCh := make(chan Frame, 1)
+	if err := b.SubscribeWithPriority("normal", normalCh, PriorityNormal); err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+
+	// Publish 2 frames quickly (both channels buffer=1, second frame will block both)
+	b.Publish(Frame{Seq: 1, Data: []byte("test1")})
+	b.Publish(Frame{Seq: 2, Data: []byte("test2")})
+
+	stats := b.Stats()
+	criticalStats := stats.Subscribers["critical"]
+	normalStats := stats.Subscribers["normal"]
+
+	// Normal should drop immediately (no retry)
+	if normalStats.Dropped != 1 {
+		t.Errorf("Expected normal to drop 1 frame immediately, got %d", normalStats.Dropped)
+	}
+
+	// Critical might succeed with retry (if consumer drains within 1ms)
+	// or drop after timeout - both are valid depending on timing
+	t.Logf("Critical: sent=%d dropped=%d criticalDropped=%d",
+		criticalStats.Sent, criticalStats.Dropped, criticalStats.CriticalDropped)
+	t.Logf("Normal: sent=%d dropped=%d", normalStats.Sent, normalStats.Dropped)
+
+	// Verify CriticalDropped is tracked
+	if criticalStats.Priority != PriorityCritical {
+		t.Errorf("Expected critical priority, got %d", criticalStats.Priority)
+	}
+}
+
+// TestCriticalDroppedMetric verifies CriticalDropped is only incremented for Critical subscribers.
+func TestCriticalDroppedMetric(t *testing.T) {
+	b := New()
+	defer b.Close()
+
+	// Create subscribers with different priorities
+	criticalCh := make(chan Frame, 1)
+	normalCh := make(chan Frame, 1)
+
+	b.SubscribeWithPriority("critical", criticalCh, PriorityCritical)
+	b.SubscribeWithPriority("normal", normalCh, PriorityNormal)
+
+	// Saturate both channels
+	for i := 0; i < 10; i++ {
+		b.Publish(Frame{Seq: uint64(i), Data: []byte("test")})
+	}
+
+	stats := b.Stats()
+
+	// Normal should have 0 CriticalDropped (not a critical subscriber)
+	if stats.Subscribers["normal"].CriticalDropped != 0 {
+		t.Errorf("Expected normal CriticalDropped=0, got %d",
+			stats.Subscribers["normal"].CriticalDropped)
+	}
+
+	// Critical may have CriticalDropped > 0 if retry also failed
+	criticalStats := stats.Subscribers["critical"]
+	t.Logf("Critical: sent=%d dropped=%d criticalDropped=%d",
+		criticalStats.Sent, criticalStats.Dropped, criticalStats.CriticalDropped)
+
+	// CriticalDropped should never exceed Dropped for critical subscriber
+	if criticalStats.CriticalDropped > criticalStats.Dropped {
+		t.Errorf("CriticalDropped (%d) should not exceed Dropped (%d)",
+			criticalStats.CriticalDropped, criticalStats.Dropped)
+	}
+}

@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -830,5 +831,612 @@ func TestGetUnhealthySubscribersEmpty(t *testing.T) {
 	unhealthy := bus.GetUnhealthySubscribers()
 	if len(unhealthy) != 0 {
 		t.Errorf("Expected empty unhealthy list, got %v", unhealthy)
+	}
+}
+
+// BenchmarkCriticalRetrySuccess measures overhead when Critical retry succeeds.
+func BenchmarkCriticalRetrySuccess(b *testing.B) {
+	bus := New()
+	defer bus.Close()
+
+	// Critical subscriber with buffer=10 (large enough to avoid drops in benchmark)
+	criticalCh := make(chan Frame, 10)
+	bus.SubscribeWithPriority("critical", criticalCh, PriorityCritical)
+
+	// Consumer goroutine draining channel
+	go func() {
+		for range criticalCh {
+			// Drain
+		}
+	}()
+
+	frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bus.Publish(frame)
+	}
+}
+
+// BenchmarkCriticalRetryTimeout measures overhead when Critical retry times out.
+func BenchmarkCriticalRetryTimeout(b *testing.B) {
+	bus := New()
+	defer bus.Close()
+
+	// Critical subscriber with buffer=1 (will saturate quickly)
+	criticalCh := make(chan Frame, 1)
+	bus.SubscribeWithPriority("critical", criticalCh, PriorityCritical)
+
+	// No consumer - channel will fill and trigger retry timeout
+
+	frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+	// Pre-fill channel
+	criticalCh <- frame
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bus.Publish(frame) // Will trigger retry + 1ms timeout
+	}
+}
+
+// BenchmarkPriorityVsNoPriority compares overhead of priority sorting.
+func BenchmarkPriorityVsNoPriority(b *testing.B) {
+	b.Run("WithPriority", func(b *testing.B) {
+		bus := New()
+		defer bus.Close()
+
+		// 10 subscribers with mixed priorities
+		for i := 0; i < 10; i++ {
+			ch := make(chan Frame, 100)
+			priority := SubscriberPriority(i % 4) // Mix of 4 priority levels
+			bus.SubscribeWithPriority(fmt.Sprintf("worker-%d", i), ch, priority)
+
+			// Consumer draining
+			go func(ch chan Frame) {
+				for range ch {
+				}
+			}(ch)
+		}
+
+		frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			bus.Publish(frame)
+		}
+	})
+
+	b.Run("AllNormalPriority", func(b *testing.B) {
+		bus := New()
+		defer bus.Close()
+
+		// 10 subscribers, all Normal priority (minimal sorting overhead)
+		for i := 0; i < 10; i++ {
+			ch := make(chan Frame, 100)
+			bus.Subscribe(fmt.Sprintf("worker-%d", i), ch) // All Normal
+
+			// Consumer draining
+			go func(ch chan Frame) {
+				for range ch {
+				}
+			}(ch)
+		}
+
+		frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			bus.Publish(frame)
+		}
+	})
+}
+
+// TestLazyRebuild verifies that cache is rebuilt lazily on first Publish().
+func TestLazyRebuild(t *testing.T) {
+	b := New().(*bus)
+	defer b.Close()
+
+	// Multiple subscribes without Publish
+	ch1 := make(chan Frame, 10)
+	ch2 := make(chan Frame, 10)
+	ch3 := make(chan Frame, 10)
+
+	b.SubscribeWithPriority("critical", ch1, PriorityCritical)
+	b.SubscribeWithPriority("normal", ch2, PriorityNormal)
+	b.SubscribeWithPriority("best-effort", ch3, PriorityBestEffort)
+
+	// Cache should be dirty after subscribes
+	if !b.cacheDirty.Load() {
+		t.Error("Expected cache to be dirty after subscribes")
+	}
+
+	// Cache should still be empty (not rebuilt yet)
+	if len(b.sortedCache) != 0 {
+		t.Errorf("Expected empty cache before Publish, got %d entries", len(b.sortedCache))
+	}
+
+	// First Publish triggers rebuild
+	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Cache should be clean now
+	if b.cacheDirty.Load() {
+		t.Error("Expected cache to be clean after first Publish")
+	}
+
+	// Cache should be populated with correct order
+	if len(b.sortedCache) != 3 {
+		t.Errorf("Expected 3 entries in cache, got %d", len(b.sortedCache))
+	}
+
+	// Verify order: Critical, Normal, BestEffort
+	if b.sortedCache[0].entry.priority != PriorityCritical {
+		t.Errorf("Expected first entry to be Critical, got %d", b.sortedCache[0].entry.priority)
+	}
+	if b.sortedCache[1].entry.priority != PriorityNormal {
+		t.Errorf("Expected second entry to be Normal, got %d", b.sortedCache[1].entry.priority)
+	}
+	if b.sortedCache[2].entry.priority != PriorityBestEffort {
+		t.Errorf("Expected third entry to be BestEffort, got %d", b.sortedCache[2].entry.priority)
+	}
+}
+
+// TestEventualConsistency verifies streaming semantics (eventual consistency).
+func TestEventualConsistency(t *testing.T) {
+	b := New()
+	defer b.Close()
+
+	// Subscribe initial worker
+	ch1 := make(chan Frame, 10)
+	b.Subscribe("worker-1", ch1)
+
+	// First Publish - only worker-1 receives
+	b.Publish(Frame{Seq: 1, Data: []byte("frame1")})
+
+	stats := b.Stats()
+	if stats.Subscribers["worker-1"].Sent != 1 {
+		t.Errorf("Expected worker-1 to receive 1 frame, got %d", stats.Subscribers["worker-1"].Sent)
+	}
+
+	// Subscribe second worker AFTER first Publish
+	ch2 := make(chan Frame, 10)
+	b.Subscribe("worker-2", ch2)
+
+	// Second Publish - both workers receive (eventual consistency)
+	b.Publish(Frame{Seq: 2, Data: []byte("frame2")})
+
+	stats = b.Stats()
+	if stats.Subscribers["worker-1"].Sent != 2 {
+		t.Errorf("Expected worker-1 to receive 2 frames, got %d", stats.Subscribers["worker-1"].Sent)
+	}
+	if stats.Subscribers["worker-2"].Sent != 1 {
+		t.Errorf("Expected worker-2 to receive 1 frame (not frame1), got %d", stats.Subscribers["worker-2"].Sent)
+	}
+
+	// worker-2 did NOT receive frame1 (eventual consistency - not retroactive)
+	if len(ch2) != 1 {
+		t.Errorf("Expected worker-2 channel to have 1 frame, got %d", len(ch2))
+	}
+}
+
+// TestBatchSubscribeOptimization verifies that multiple Subscribes result in 1 rebuild.
+func TestBatchSubscribeOptimization(t *testing.T) {
+	b := New().(*bus)
+	defer b.Close()
+
+	// Subscribe 10 workers rapidly
+	for i := 0; i < 10; i++ {
+		ch := make(chan Frame, 10)
+		b.Subscribe(fmt.Sprintf("worker-%d", i), ch)
+	}
+
+	// All subscribes marked cache dirty
+	if !b.cacheDirty.Load() {
+		t.Error("Expected cache to be dirty after subscribes")
+	}
+
+	// Cache still empty (not rebuilt yet - lazy!)
+	if len(b.sortedCache) != 0 {
+		t.Error("Expected cache to be empty before Publish (lazy rebuild)")
+	}
+
+	// First Publish triggers ONE rebuild for all 10 subscribes
+	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Cache now populated
+	if len(b.sortedCache) != 10 {
+		t.Errorf("Expected 10 entries in cache, got %d", len(b.sortedCache))
+	}
+
+	// Cache clean
+	if b.cacheDirty.Load() {
+		t.Error("Expected cache to be clean after Publish")
+	}
+}
+
+// TestUnsubscribeInvalidatesCache verifies Unsubscribe marks cache dirty.
+func TestUnsubscribeInvalidatesCache(t *testing.T) {
+	b := New().(*bus)
+	defer b.Close()
+
+	ch1 := make(chan Frame, 10)
+	ch2 := make(chan Frame, 10)
+	b.Subscribe("worker-1", ch1)
+	b.Subscribe("worker-2", ch2)
+
+	// Trigger rebuild
+	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Cache clean
+	if b.cacheDirty.Load() {
+		t.Error("Expected cache to be clean after Publish")
+	}
+
+	// Unsubscribe marks dirty
+	b.Unsubscribe("worker-1")
+
+	if !b.cacheDirty.Load() {
+		t.Error("Expected cache to be dirty after Unsubscribe")
+	}
+
+	// Next Publish rebuilds cache
+	b.Publish(Frame{Seq: 2, Data: []byte("test")})
+
+	// Cache clean again
+	if b.cacheDirty.Load() {
+		t.Error("Expected cache to be clean after Publish following Unsubscribe")
+	}
+
+	// Cache has correct size
+	if len(b.sortedCache) != 1 {
+		t.Errorf("Expected 1 entry in cache after Unsubscribe, got %d", len(b.sortedCache))
+	}
+}
+
+// TestSmartCheckAllSamePriority verifies no sorting when all same priority.
+func TestSmartCheckAllSamePriority(t *testing.T) {
+	b := New().(*bus)
+	defer b.Close()
+
+	// Subscribe 5 workers, all Normal priority
+	for i := 0; i < 5; i++ {
+		ch := make(chan Frame, 10)
+		b.Subscribe(fmt.Sprintf("worker-%d", i), ch)
+	}
+
+	// Check needsSorting before rebuild
+	needsSort := b.needsSorting()
+	if needsSort {
+		t.Error("Expected needsSorting=false for all same priority (Normal)")
+	}
+
+	// Trigger rebuild
+	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Verify cache populated (even without sorting)
+	if len(b.sortedCache) != 5 {
+		t.Errorf("Expected cache to have 5 entries, got %d", len(b.sortedCache))
+	}
+
+	// All should have Normal priority
+	for _, sub := range b.sortedCache {
+		if sub.entry.priority != PriorityNormal {
+			t.Errorf("Expected all entries to be Normal, got %d", sub.entry.priority)
+		}
+	}
+}
+
+// TestSmartCheckMixedPriorities verifies sorting when priorities are mixed.
+func TestSmartCheckMixedPriorities(t *testing.T) {
+	b := New().(*bus)
+	defer b.Close()
+
+	// Subscribe 3 workers with mixed priorities
+	ch1 := make(chan Frame, 10)
+	ch2 := make(chan Frame, 10)
+	ch3 := make(chan Frame, 10)
+
+	b.SubscribeWithPriority("critical", ch1, PriorityCritical)
+	b.SubscribeWithPriority("normal", ch2, PriorityNormal)
+	b.SubscribeWithPriority("best-effort", ch3, PriorityBestEffort)
+
+	// Check needsSorting before rebuild
+	needsSort := b.needsSorting()
+	if !needsSort {
+		t.Error("Expected needsSorting=true for mixed priorities")
+	}
+
+	// Trigger rebuild
+	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Verify cache populated and sorted
+	if len(b.sortedCache) != 3 {
+		t.Errorf("Expected cache to have 3 entries, got %d", len(b.sortedCache))
+	}
+
+	// Verify order: Critical, Normal, BestEffort
+	if b.sortedCache[0].entry.priority != PriorityCritical {
+		t.Errorf("Expected first entry to be Critical, got %d", b.sortedCache[0].entry.priority)
+	}
+	if b.sortedCache[1].entry.priority != PriorityNormal {
+		t.Errorf("Expected second entry to be Normal, got %d", b.sortedCache[1].entry.priority)
+	}
+	if b.sortedCache[2].entry.priority != PriorityBestEffort {
+		t.Errorf("Expected third entry to be BestEffort, got %d", b.sortedCache[2].entry.priority)
+	}
+}
+
+// TestSmartCheckSingleSubscriber verifies no sorting for 1 subscriber.
+func TestSmartCheckSingleSubscriber(t *testing.T) {
+	b := New().(*bus)
+	defer b.Close()
+
+	ch := make(chan Frame, 10)
+	b.SubscribeWithPriority("worker-1", ch, PriorityCritical)
+
+	// Check needsSorting
+	needsSort := b.needsSorting()
+	if needsSort {
+		t.Error("Expected needsSorting=false for single subscriber")
+	}
+
+	// Trigger rebuild
+	b.Publish(Frame{Seq: 1, Data: []byte("test")})
+
+	// Verify cache has 1 entry
+	if len(b.sortedCache) != 1 {
+		t.Errorf("Expected cache to have 1 entry, got %d", len(b.sortedCache))
+	}
+}
+
+// TestSmartCheckOrionScenarios verifies optimization in real Orion use cases.
+func TestSmartCheckOrionScenarios(t *testing.T) {
+	// Scenario 1: Sleep monitoring (all Normal)
+	t.Run("SleepScene_AllNormal", func(t *testing.T) {
+		b := New().(*bus)
+		defer b.Close()
+
+		// SleepExpert, PostureExpert, CaregiverExpert - all Normal
+		b.Subscribe("sleep-expert", make(chan Frame, 10))
+		b.Subscribe("posture-expert", make(chan Frame, 10))
+		b.Subscribe("caregiver-expert", make(chan Frame, 10))
+
+		if b.needsSorting() {
+			t.Error("Sleep scene should not need sorting (all Normal)")
+		}
+	})
+
+	// Scenario 2: Alert state (all Critical)
+	t.Run("AlertScene_AllCritical", func(t *testing.T) {
+		b := New().(*bus)
+		defer b.Close()
+
+		// EdgeExpert, ExitExpert - both Critical during alert
+		b.SubscribeWithPriority("edge-expert", make(chan Frame, 10), PriorityCritical)
+		b.SubscribeWithPriority("exit-expert", make(chan Frame, 10), PriorityCritical)
+
+		if b.needsSorting() {
+			t.Error("Alert scene should not need sorting (all Critical)")
+		}
+	})
+
+	// Scenario 3: Normal state (mixed priorities)
+	t.Run("NormalScene_MixedPriorities", func(t *testing.T) {
+		b := New().(*bus)
+		defer b.Close()
+
+		// EdgeExpert (High), PostureExpert (Normal), CaregiverExpert (BestEffort)
+		b.SubscribeWithPriority("edge-expert", make(chan Frame, 10), PriorityHigh)
+		b.SubscribeWithPriority("posture-expert", make(chan Frame, 10), PriorityNormal)
+		b.SubscribeWithPriority("caregiver-expert", make(chan Frame, 10), PriorityBestEffort)
+
+		if !b.needsSorting() {
+			t.Error("Normal scene should need sorting (mixed priorities)")
+		}
+	})
+}
+
+// BenchmarkLazyRebuildSingleSubscriber measures hot path with 1 subscriber (70-80% use case).
+func BenchmarkLazyRebuildSingleSubscriber(b *testing.B) {
+	bus := New()
+	defer bus.Close()
+
+	// Single subscriber (most common case in production)
+	ch := make(chan Frame, 100)
+	bus.Subscribe("worker-1", ch)
+
+	// Consumer draining
+	go func() {
+		for range ch {
+		}
+	}()
+
+	frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bus.Publish(frame)
+	}
+}
+
+// BenchmarkLazyRebuildTenSubscribers measures hot path with 10 subscribers (after rebuild).
+func BenchmarkLazyRebuildTenSubscribers(b *testing.B) {
+	bus := New()
+	defer bus.Close()
+
+	// 10 subscribers with mixed priorities
+	for i := 0; i < 10; i++ {
+		ch := make(chan Frame, 100)
+		priority := SubscriberPriority(i % 4)
+		bus.SubscribeWithPriority(fmt.Sprintf("worker-%d", i), ch, priority)
+
+		// Consumer draining
+		go func(ch chan Frame) {
+			for range ch {
+			}
+		}(ch)
+	}
+
+	// Trigger initial rebuild (not measured)
+	bus.Publish(Frame{Seq: 0, Data: []byte("warmup")})
+
+	frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bus.Publish(frame) // Hot path - cache already rebuilt
+	}
+}
+
+// BenchmarkRebuildOperation measures cost of rebuild operation itself.
+func BenchmarkRebuildOperation(b *testing.B) {
+	// Create bus with 10 subscribers
+	bus := New().(*bus)
+	defer bus.Close()
+
+	for i := 0; i < 10; i++ {
+		ch := make(chan Frame, 10)
+		priority := SubscriberPriority(i % 4)
+		bus.SubscribeWithPriority(fmt.Sprintf("worker-%d", i), ch, priority)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Measure only the sorting operation
+		bus.sortSubscribersByPriority()
+	}
+}
+
+// BenchmarkBatchSubscribeLatency measures latency of multiple Subscribes (cold path).
+func BenchmarkBatchSubscribeLatency(b *testing.B) {
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		bus := New()
+		b.StartTimer()
+
+		// Subscribe 10 workers (measure Subscribe latency)
+		for j := 0; j < 10; j++ {
+			ch := make(chan Frame, 10)
+			bus.Subscribe(fmt.Sprintf("worker-%d", j), ch)
+		}
+
+		b.StopTimer()
+		bus.Close()
+	}
+}
+
+// BenchmarkSmartCheckAllSamePriority measures rebuild with all same priority (no sorting).
+func BenchmarkSmartCheckAllSamePriority(b *testing.B) {
+	bus := New().(*bus)
+	defer bus.Close()
+
+	// 10 workers, all Normal priority
+	for i := 0; i < 10; i++ {
+		ch := make(chan Frame, 10)
+		bus.Subscribe(fmt.Sprintf("worker-%d", i), ch)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Measure rebuild cost (smart check detects no sorting needed)
+		bus.cacheDirty.Store(true) // Force rebuild
+		bus.sortedCache = nil
+
+		if bus.needsSorting() {
+			bus.sortedCache = bus.sortSubscribersByPriority()
+		} else {
+			bus.sortedCache = bus.subscribersToSlice()
+		}
+	}
+}
+
+// BenchmarkSmartCheckMixedPriorities measures rebuild with mixed priorities (with sorting).
+func BenchmarkSmartCheckMixedPriorities(b *testing.B) {
+	bus := New().(*bus)
+	defer bus.Close()
+
+	// 10 workers, mixed priorities
+	for i := 0; i < 10; i++ {
+		ch := make(chan Frame, 10)
+		priority := SubscriberPriority(i % 4) // Mix of 4 levels
+		bus.SubscribeWithPriority(fmt.Sprintf("worker-%d", i), ch, priority)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Measure rebuild cost (smart check detects sorting needed)
+		bus.cacheDirty.Store(true)
+		bus.sortedCache = nil
+
+		if bus.needsSorting() {
+			bus.sortedCache = bus.sortSubscribersByPriority()
+		} else {
+			bus.sortedCache = bus.subscribersToSlice()
+		}
+	}
+}
+
+// BenchmarkPublishAllSamePriority measures Publish() hot path with all same priority.
+func BenchmarkPublishAllSamePriority(b *testing.B) {
+	bus := New()
+	defer bus.Close()
+
+	// 5 workers, all Normal (typical sleep scene in Orion)
+	for i := 0; i < 5; i++ {
+		ch := make(chan Frame, 100)
+		bus.Subscribe(fmt.Sprintf("worker-%d", i), ch)
+
+		// Consumer draining
+		go func(ch chan Frame) {
+			for range ch {
+			}
+		}(ch)
+	}
+
+	// Trigger initial rebuild
+	bus.Publish(Frame{Seq: 0, Data: []byte("warmup")})
+
+	frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bus.Publish(frame)
+	}
+}
+
+// BenchmarkPublishMixedPriorities measures Publish() hot path with mixed priorities.
+func BenchmarkPublishMixedPriorities(b *testing.B) {
+	bus := New()
+	defer bus.Close()
+
+	// 5 workers, mixed priorities (typical normal scene in Orion)
+	priorities := []SubscriberPriority{
+		PriorityHigh,      // EdgeExpert
+		PriorityNormal,    // PostureExpert
+		PriorityNormal,    // CaregiverExpert
+		PriorityBestEffort, // Research worker
+		PriorityBestEffort, // Telemetry
+	}
+
+	for i, priority := range priorities {
+		ch := make(chan Frame, 100)
+		bus.SubscribeWithPriority(fmt.Sprintf("worker-%d", i), ch, priority)
+
+		// Consumer draining
+		go func(ch chan Frame) {
+			for range ch {
+			}
+		}(ch)
+	}
+
+	// Trigger initial rebuild
+	bus.Publish(Frame{Seq: 0, Data: []byte("warmup")})
+
+	frame := Frame{Seq: 1, Data: make([]byte, 1024)}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bus.Publish(frame)
 	}
 }

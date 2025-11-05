@@ -520,3 +520,124 @@ Backlog markdown files are source of truth, synced with GitHub issues.
 | GStreamer Pipeline  | Mermaid flowcharts (Software/VAAPI)  | Mermaid graph (C2) + table  | ⚠ Duplicación visual (OK - diferentes niveles)      |     |
 | Reconnection Logic  | State machine (Líneas 481-546)       | AD-5 + tabla (C4)           | ⚠ Duplicación moderada (OK - diferentes formatos)   |     |
 | Design Decisions    | 6 ADRs (AD-1 a AD-6)                 | 8 ADRs (más detallados)     | ⚠ C4 es superset → Merge?                           |     |
+---
+
+## How to Work with Claude: Session Types
+
+Orion 2.0 development supports two types of pairing sessions. **Claude should auto-detect which type based on Ernesto's initial message.**
+
+### 🔍 Discovery Session (Exploratory Design)
+
+**When**: Designing new modules or exploring uncharted design space
+
+**Trigger Phrases**:
+- "Charlemos el diseño de [module/feature]"
+- "Pensaba en [technical decision]... ¿qué te parece?"
+- "Pair-discovery: [topic]"
+- "¿Cómo atacamos [problema] desde diseño?"
+
+**Protocol**: See [PAIR_DISCOVERY_PROTOCOL.md](./PAIR_DISCOVERY_PROTOCOL.md) for complete operating manual.
+
+**Key Points**:
+- Explore tradeoffs in THIS context (not generic best practices)
+- Think from first principles (not "let me research")
+- Challenge proposals to enable discovery
+- Checkpoint every 3-5 decisions
+- Produce: ADRs + Architecture docs + Named insights
+
+**Example**:
+```
+Ernesto: "Pair-discovery: worker-lifecycle restart policies.
+         Pensaba en KISS (one-shot retry)... ¿qué te parece?"
+
+Claude: "Restart policies for workers with different SLAs. Interesting.
+        Let me explore tradeoffs:
+        - KISS one-shot: Simple, fail-fast
+        - Exponential backoff: Resilient, but masks failures
+        - Hybrid (SLA-based): Critical=3 retries, BestEffort=0
+
+        In context of fall detection (life-critical)...
+        ¿Qué pensás?"
+```
+
+---
+
+### 💻 Coding Session (Implementation)
+
+**When**: Implementing already-designed functionality (ADRs exist)
+
+**Trigger Phrases**:
+- "Implementemos [module] según los ADRs"
+- "Escribí el código para [component]"
+- "Según ADR-X, [decision]. Empecemos."
+
+**Protocol**: Read relevant ADRs + ARCHITECTURE.md, implement as specified.
+
+**Key Points**:
+- Do NOT explore alternatives (design already decided)
+- Follow ADRs exactly
+- Ask clarifications if ADR ambiguous
+- Ensure compilation (primary test)
+- Write tests (Ernesto runs manually)
+
+**Example**:
+```
+Ernesto: "Implementemos FrameSupplier inbox mailbox.
+         Según ADR-001 (sync.Cond) y ADR-004 (JIT input)."
+
+Claude: "Entendido. Implementando según ADRs:
+        - sync.Cond + mutex + single slot
+        - Non-blocking Publish, blocking consume
+        - Zero-copy (shared pointers)
+
+        Empezando con inbox.go..."
+```
+
+---
+
+### 🚨 DO NOT Mix Protocols
+
+**Wrong** (exploring during coding):
+```
+Ernesto: "Implementemos con sync.Cond"
+Claude: "¿Deberíamos explorar channels también?" ❌
+```
+
+**Wrong** (coding during discovery):
+```
+Ernesto: "Charlemos restart policies"
+Claude: "Ok, voy a implementar backoff..." ❌
+```
+
+---
+
+### If Ambiguous
+
+If Claude cannot determine session type:
+```
+Claude: "¿Esto es discovery (explorar diseño) o coding (implementar según ADRs)?
+
+- Discovery: Exploramos alternativas, cuestionamos, documentamos
+- Coding: Implementamos según diseño ya definido
+
+¿Cuál preferís?"
+```
+
+---
+
+## Module-Specific Context
+
+Each module has its own CLAUDE.md with:
+- Bounded context definition
+- Module-specific philosophy
+- Session type examples
+- References to ADRs
+
+**Example module paths**:
+- `modules/framesupplier/CLAUDE.md`
+- `modules/stream-capture/CLAUDE.md` (future)
+- `modules/worker-lifecycle/CLAUDE.md` (future)
+
+**Always read module CLAUDE.md** before starting work on that module.
+
+---

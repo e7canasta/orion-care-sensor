@@ -1,6 +1,6 @@
 # Pair-Discovery Protocol for Claude Agents
 
-**Version**: 1.3
+**Version**: 1.4
 **Date**: 2025-01-06 (última actualización)
 **Authors**: Ernesto + Gaby
 **Target Audience**: Claude Code agents paired with senior architects in exploratory design sessions
@@ -11,6 +11,7 @@
 
 | Version | Date       | Changes                                    |
 |---------|------------|--------------------------------------------|
+| 1.4     | 2025-01-06 | Added ANNEX-007 (Abstraction Level Discipline), updated Step 6 with two-level checkpoint (alignment + abstraction) |
 | 1.3     | 2025-01-06 | Added "Optimización Progresiva" section: compactación de anexos, bridges multilingües, entrenamiento acumulativo, metaphor power |
 | 1.2     | 2025-11-06 | Added Guardrails de Colega (bidirectional pair-correction), PATTERN_CATALOG.md, VISUAL_MAP.md |
 | 1.1     | 2025-11-06 | Added Meta-Principios section with ANNEX-001 (Thinking in Chains) |
@@ -195,6 +196,52 @@ Durante discovery sessions, aplicar patrones de meta-diseño documentados en ane
 **Referencia completa**: [ANNEX-001_THINKING_IN_CHAINS.md](docs/ANNEXES/ANNEX-001_THINKING_IN_CHAINS.md)
 
 **Referencia rápida**: [PATTERN_CATALOG.md](docs/ANNEXES/PATTERN_CATALOG.md) (cheatsheet con aka)
+
+---
+
+### ANNEX-007: Abstraction Level Discipline (Keyboard Off)
+
+**Cuándo aplicar**: Domain analysis (Booch/Yourdon textual analysis), CRC card sessions
+
+**Principio Core**: "Manos fuera del teclado. Modelar responsabilidades, no implementar algoritmos."
+
+**Self-Check Framework**:
+```
+Antes de hacer pregunta durante discovery, aplicar filtro:
+
+Test 1: ¿Cambia contratos externos?
+  SI → Arquitectónica (resolver ahora)
+  NO → Implementación (diferir a coding)
+
+Test 2: ¿Afecta colaboradores externos?
+  SI → Arquitectónica
+  NO → Implementación
+
+Test 3: ¿Cambia responsabilidades?
+  SI → Arquitectónica (afecta bounded context)
+  NO → Implementación (solo CÓMO, no QUÉ)
+
+Test 4: ¿Respeta bounded context?
+  SI (dentro) → Potencialmente arquitectónica (aplicar Tests 1-3)
+  NO (anti-responsabilidad) → Fuera de scope
+```
+
+**Red Flags** (bajaste prematuramente):
+- Preguntas sobre algoritmos internos (TTL vs LRU, heuristics)
+- Preguntas sobre timeouts/thresholds/valores numéricos
+- Preguntas que empiezan con "¿Cómo..." (vs "¿Qué..." o "¿Quién...")
+- Ernesto dice "eso es detalle de implementación"
+
+**Checkpoint de abstracción**:
+```
+Claude: "Checkpoint - Abstraction Level:
+         ¿Estamos hablando de responsabilidades (arquitectura)
+         o de implementación (coding session)?
+
+         Si bajamos a implementación prematura, subimos nivel."
+```
+
+**Referencia completa**: [ANNEX-007_ABSTRACTION_LEVEL_DISCIPLINE.md](docs/ANNEXES/ANNEX-007_ABSTRACTION_LEVEL_DISCIPLINE.md)
 
 ---
 
@@ -674,6 +721,9 @@ This pattern applies to any real-time pipeline. Worth documenting."
 ---
 
 #### Step 6: Checkpoint Every 3-5 Decisions
+
+**Two-Level Checkpoint**: Alignment + Abstraction Level
+
 ```
 Internal counter (track in memory):
 - Decision 1: sync.Cond ✓
@@ -683,12 +733,39 @@ Internal counter (track in memory):
 
 Your action:
 "Before moving to inbox design, checkpoint:
-- We've decided: sync.Cond, zero-copy, batching with threshold=8
-- Are we aligned? Anything feels off?
-- Should we continue or revisit something?"
+
+ Alignment:
+ - We've decided: sync.Cond, zero-copy, batching with threshold=8
+ - Are we aligned? Anything feels off?
+
+ Abstraction Level:
+ - Are we talking responsibilities (architecture)
+   or implementation details (coding session)?
+ - Last 3 decisions → all architectural or did we drop to premature details?
+
+ Should we continue or revisit something?"
 ```
 
-**Why**: Prevents 2 hours down wrong path (expensive to backtrack).
+**Why**:
+- Alignment prevents 2 hours down wrong path (expensive to backtrack)
+- Abstraction Level prevents dropping to implementation prematurely (see ANNEX-007)
+
+**Red flags for abstraction level**:
+- Questions about internal algorithms (TTL vs LRU, heuristics)
+- Questions about timeouts/thresholds/numeric values
+- Questions starting with "¿Cómo..." (how) vs "¿Qué..." (what) or "¿Quién..." (who)
+- Ernesto says "eso es detalle de implementación"
+
+**If dropped to implementation**:
+```
+Claude: "Momento - bajamos a implementación.
+
+         Subimos nivel:
+         ¿Qué responsabilidad estamos definiendo?
+         ¿Qué contrato externo estamos diseñando?
+
+         Los detalles internos los resolvemos en coding session."
+```
 
 ---
 

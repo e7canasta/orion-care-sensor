@@ -183,9 +183,45 @@ Este directorio contiene **unidades de pensamiento** (patrones de meta-diseño) 
 
 ---
 
+---
+
+### ANNEX-007: Abstraction Level Discipline (Keyboard Off)
+**Meta-Principio**: Manos Fuera del Teclado - Modelar, No Implementar
+**Status**: 🟢 Activo
+
+**Qué resuelve**:
+- Cuándo pregunta es arquitectónica vs implementación prematura
+- Self-check framework (4 tests: contratos externos, colaboradores, responsabilidades, bounded context)
+- Deep ≠ Detailed (pensar profundo EN EL NIVEL CORRECTO)
+- George Box principle: modelos útiles vs sobre-definidos
+
+**Cuándo aplicar**:
+- Domain analysis (Booch/Yourdon textual analysis, CRC cards)
+- Discovery sessions (evitar bajar a implementación prematura)
+- Checkpoint de abstracción (cada 3-5 decisiones)
+
+**Tests clave**:
+1. ¿Cambia contratos externos? (SI → arquitectónica, NO → implementación)
+2. ¿Afecta colaboradores externos? (SI → arquitectónica)
+3. ¿Cambia responsabilidades? (QUÉ hace vs CÓMO lo hace)
+4. ¿Respeta bounded context? (dentro vs anti-responsabilidades)
+
+**Red Flags**:
+- Preguntas sobre algoritmos internos (TTL vs LRU, heuristics)
+- Preguntas sobre timeouts/thresholds/valores numéricos
+- Preguntas que empiezan con "¿Cómo..." (vs "¿Qué..." o "¿Quién...")
+- Ernesto dice "eso es detalle de implementación"
+
+**Referencias**:
+- Caso de estudio: Worker-Supervisor domain analysis
+- Pattern: Booch/Yourdon OOA (sustantivos → clases, verbos → responsabilidades)
+- Checklist completo en [ANNEX-007](./ANNEX-007_ABSTRACTION_LEVEL_DISCIPLINE.md)
+
+---
+
 ## Futuros Anexos (Roadmap)
 
-### ANNEX-007: Zero-Copy Architectures
+### ANNEX-008: Zero-Copy Architectures
 **Meta-Principio**: "Ownership transfer > Memory copy"
 **Status**: 🟡 Propuesto (no escrito)
 
@@ -196,7 +232,7 @@ Este directorio contiene **unidades de pensamiento** (patrones de meta-diseño) 
 
 ---
 
-### ANNEX-008: JIT End-to-End (Symmetric Architecture)
+### ANNEX-009: JIT End-to-End (Symmetric Architecture)
 **Meta-Principio**: "Casa de herrero, cuchillo de acero"
 **Status**: 🟡 Propuesto (no escrito)
 
@@ -252,5 +288,5 @@ Si durante pair-discovery emerge un patrón repetible:
 ---
 
 **Última actualización**: 2025-01-06
-**Anexos activos**: 6 (ANNEX-001, 002, 003, 004, 005, 006)
-**Anexos propuestos**: 2 (ANNEX-007, 008)
+**Anexos activos**: 7 (ANNEX-001, 002, 003, 004, 005, 006, 007)
+**Anexos propuestos**: 2 (ANNEX-008, 009)

@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+---
+
+## 🎯 For Claude Agents: Start Here
+
+**IMPORTANT**: Before working on this project, read these documents IN ORDER:
+
+1. **[CLAUDE_CONTEXT.md](./CLAUDE_CONTEXT.md)** - AI-to-AI knowledge transfer (philosophical patterns, pairing-specific context) - **READ FIRST**
+2. **[PAIR_DISCOVERY_PROTOCOL.md](./PAIR_DISCOVERY_PROTOCOL.md)** - Discovery session process (Point Silla → Discovery → Crystallization)
+3. **This document** (CLAUDE.md) - Project technical overview
+
+**Why this order matters**:
+- CLAUDE_CONTEXT.md = HOW to think and pair with Ernesto (cognitive patterns)
+- PAIR_DISCOVERY_PROTOCOL = WHAT process to follow (discovery workflow)
+- CLAUDE.md = WHAT you're working on (project context)
+
+**Expected ramp-up**: <10 minutes to effective pair-discovery (vs hours of trial-error).
+
+---
+
 ## Project Overview
 
 **Orion** is a real-time AI inference system for video surveillance, specifically designed for geriatric patient monitoring. It operates as a "smart sensor" that observes and reports visual data via structured inference outputs, following the philosophy: **"Orión Ve, No Interpreta"** (Orion Sees, Doesn't Interpret).

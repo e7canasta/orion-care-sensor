@@ -11,9 +11,15 @@
 **Module-specific context**:
 1. **[Global CLAUDE_CONTEXT.md](../../CLAUDE_CONTEXT.md)** - AI-to-AI patterns (HOW to pair with Ernesto) - **READ FIRST**
 2. **[PAIR_DISCOVERY_PROTOCOL.md](../../PAIR_DISCOVERY_PROTOCOL.md)** - Discovery process
-3. **This document** - FrameSupplier module specifics
+3. **[ANNEX-001: Thinking in Chains](../../docs/ANNEXES/ANNEX-001_THINKING_IN_CHAINS.md)** - Meta-principio de diseño de cadenas (CRÍTICO para este módulo)
+4. **This document** - FrameSupplier module specifics
 
-**Expected ramp-up**: <5 minutes (global context) + <5 minutes (module context) = <10 minutes total.
+**Expected ramp-up**: <5 minutes (global context) + <5 minutes (module context) + <5 minutes (ANNEX-001) = <15 minutes total.
+
+**Why ANNEX-001 is critical for this module**:
+- FrameSupplier es caso de estudio (r1.0 → r2.0 → r3.0, cambió <10%)
+- Tests mentales aplicados durante diseño (scale horizontal, movimientos futuros)
+- ADRs estructurados como contratos de cadena (proveedor → nosotros → cliente)
 
 ---
 

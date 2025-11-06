@@ -1,7 +1,7 @@
 # Pair-Discovery Protocol for Claude Agents
 
-**Version**: 1.0
-**Date**: 2025-01-05
+**Version**: 1.3
+**Date**: 2025-01-06 (última actualización)
 **Authors**: Ernesto + Gaby
 **Target Audience**: Claude Code agents paired with senior architects in exploratory design sessions
 
@@ -11,6 +11,9 @@
 
 | Version | Date       | Changes                                    |
 |---------|------------|--------------------------------------------|
+| 1.3     | 2025-01-06 | Added "Optimización Progresiva" section: compactación de anexos, bridges multilingües, entrenamiento acumulativo, metaphor power |
+| 1.2     | 2025-11-06 | Added Guardrails de Colega (bidirectional pair-correction), PATTERN_CATALOG.md, VISUAL_MAP.md |
+| 1.1     | 2025-11-06 | Added Meta-Principios section with ANNEX-001 (Thinking in Chains) |
 | 1.0     | 2025-01-05 | Initial protocol - Point Silla → Discovery → Crystallization |
 
 ---
@@ -159,6 +162,403 @@ Not for everyone, but those who use it extract maximum value.
 **Timing**: Immediately after discovery (within same session if possible).
 
 **Why**: Insights decay fast (memory loss, context evaporation).
+
+---
+
+## META-PRINCIPIOS: Patrones de Diseño Avanzados
+
+Durante discovery sessions, aplicar patrones de meta-diseño documentados en anexos.
+
+**Ver**: [docs/ANNEXES/README.md](docs/ANNEXES/README.md) para índice completo.
+
+### ANNEX-001: Thinking in Chains (Rey No Ahogado)
+
+**Cuándo aplicar**: Discovery de módulos core, decisiones arquitectónicas multi-release
+
+**Tests mentales clave**:
+1. **Scale Horizontal**: ¿r2.0 (multi-X) es instanciar N veces sin refactor?
+2. **Movimientos Futuros**: ¿Hay >1 solución para constraints futuros?
+3. **Estabilidad**: De patineta a avión, ¿cambios <10%?
+
+**Principio**: Diseñar cadenas (proveedor → nosotros → cliente), no módulos aislados.
+
+**Checklist**:
+```
+☐ Identificar value stream [Proveedor] → [Nosotros] → [Cliente]
+☐ ADR documenta compromisos para proveedor
+☐ ADR documenta compromisos para cliente
+☐ ADR documenta evoluciones futuras (r2.0, r3.0)
+☐ Validar: Implementamos solo r1.0 (YAGNI)
+☐ Validar: Documentamos movilidad futura
+```
+
+**Referencia completa**: [ANNEX-001_THINKING_IN_CHAINS.md](docs/ANNEXES/ANNEX-001_THINKING_IN_CHAINS.md)
+
+**Referencia rápida**: [PATTERN_CATALOG.md](docs/ANNEXES/PATTERN_CATALOG.md) (cheatsheet con aka)
+
+---
+
+## OPTIMIZACIÓN PROGRESIVA: Compactación y Entrenamiento
+
+**Propósito**: Evolucionar documentación para ramp-up más rápido de futuros Claude agents.
+
+### Compactación Progresiva de Anexos
+
+**Principio**: "Anexos v1.0 son completos. Con uso real, destilar esencia."
+
+**Evolución esperada**:
+```
+v1.0: ANNEX-001 (700 líneas, completo, primera iteración)
+v2.0: ANNEX-001 (400 líneas, esencia destilada)
+      + PATTERN_CATALOG expanded (más entries)
+v3.0: ANNEX-001 (200 líneas, core concepts)
+      + PATTERN_CATALOG como index principal
+```
+
+**Proceso**:
+1. **Uso real** (6 meses) → Identificar qué secciones se referencian más
+2. **Destilación** → Esencia a PATTERN_CATALOG, detalles en anexo
+3. **Optimización** → Signal/noise mejorado (ramp-up <5 min)
+
+**Trigger para compactación**:
+- Anexo >500 líneas Y usado frecuentemente
+- Patterns repetidos entre anexos (consolidar)
+- Claude agents reportan "ramp-up lento" (>15 min)
+
+---
+
+### Bridges Multilingües (Transpilar a Corpus de Claude)
+
+**Concepto**: Términos Visiona + Aliases → Claude reconoce inmediatamente
+
+**Ejemplo actual**:
+```
+Ernesto: "Es como rey ahogado"
+
+Claude (sin bridges):
+  - Infiere de contexto (lento, puede fallar)
+  - Pregunta confirmación (interrumpe flow)
+
+Claude (con bridges en PATTERN_CATALOG):
+  - Lookup: "Rey ahogado" → Technical debt that closes options
+  - Entiende inmediatamente (ramp-up instantáneo)
+  - Responde: "Entiendo, estamos en 'rey ahogado' - r1.0 cierra r2.0"
+```
+
+**Estructura de bridges**:
+```markdown
+## [Término Visiona]
+
+**Aka**: (múltiples aliases para search)
+- Formal: Technical term
+- Analogía: Metaphor equivalent
+- Idiom: Common expression
+
+**Claude Corpus Bridge**:
+(Términos que Claude ya conoce de entrenamiento)
+- Concept A (from domain X)
+- Concept B (from domain Y)
+
+**Industria Terms**:
+(Términos estándar para comunicación externa)
+```
+
+**Beneficio**: Empatía bidireccional de comprensión
+- Ernesto → Usa metáforas ricas (más carga semántica)
+- Claude → Entiende via bridges (corpus activado)
+- Claude → Responde con términos Visiona (respeto vocabulario)
+
+---
+
+### Entrenamiento Acumulativo (Optimización via Versiones)
+
+**Visión a futuro**: Cada versión de Claude entrenada con más vibe sessions.
+
+```
+Claude Sonnet 4.5 (actual):
+- Primera vez con protocolo Visiona
+- Aprende durante sesión (pair-discovery)
+- Ramp-up: ~10-15 min
+
+Claude Sonnet 5.0 (futuro):
+- Entrenado con transcripts de estas sesiones
+- Reconoce "Rey ahogado" en corpus (inmediato)
+- Ramp-up: ~5 min
+- Puede sugerir mejoras a anexos
+
+Claude Sonnet 6.0 (futuro++):
+- Entrenado con 100+ vibe sessions Visiona
+- Habla "Visiona-ese" nativamente
+- Propone nuevos anexos (emerge patterns no vistos)
+- Ramp-up: <3 min
+```
+
+**Protocolo + Anexos + Pattern Catalog = Training Corpus de alta calidad**
+
+**Ciclo de optimización**:
+1. Vibe sessions → Transcripts con términos Visiona
+2. Anthropic training → Próxima versión Claude
+3. Nuevos Claude → Reconocen términos inmediatamente
+4. Feedback loop → Actualizamos anexos con nuevos insights
+
+---
+
+### Metaphor Power: ¿Por Qué Metáforas > Términos Técnicos?
+
+**Carga semántica mayor**:
+```
+"Technical Debt" (técnico, frío):
+- Concepto abstracto
+- No evoca sensación
+- Difícil de recordar
+
+"Rey No Ahogado" (metáfora rica):
+- Imagen visual (rey en tablero)
+- Evoca sensación (estar atrapado)
+- Memorable (1 frase = 5 conceptos)
+- Carga emocional (no es error, es restricción)
+```
+
+**Cognitive load MENOR**:
+- Metáfora rica = menos esfuerzo mental (imagen vs abstracción)
+- Más rápido de procesar (visual > verbal)
+- Más fácil de recordar (historias > datos)
+
+**Ejemplos del catálogo**:
+- "Ojo de Sauron" > "Attention ROI" (vigilancia + poder + criticidad)
+- "Blues con Guardrails" > "Architectural Forecasting" (creatividad dentro de límites)
+- "Los Tres Ojos" > "Multi-Dimensional Thinking" (3 perspectivas simultáneas)
+
+**Protocolo de uso**:
+1. Ernesto usa metáfora Visiona (carga semántica alta)
+2. Claude busca en PATTERN_CATALOG (bridges a corpus)
+3. Claude entiende via bridges (activación rápida)
+4. Claude responde con término Visiona (respeto vocabulario)
+
+---
+
+### Mantenimiento del Sistema Operativo
+
+**Cuándo actualizar PATTERN_CATALOG**:
+- ✅ Nuevo término emerge en discovery session
+- ✅ Término existente necesita más aliases (search improvement)
+- ✅ Claude futuro reporta "término no reconocido"
+
+**Cuándo compactar ANEXO**:
+- ✅ Anexo >500 líneas Y frecuentemente referenciado
+- ✅ Ramp-up lento (>15 min para entender anexo)
+- ✅ Patterns repetidos (consolidar en catalog)
+
+**Cuándo crear NUEVO anexo**:
+- ✅ Pattern complejo emerge (necesita >200 líneas explicación)
+- ✅ Pattern transversal (aplica a múltiples módulos)
+- ✅ Pattern con implicaciones filosóficas (no solo técnicas)
+
+**Revisión trimestral**:
+```
+☐ ¿Nuevos patterns documentables?
+☐ ¿Anexos necesitan compactación?
+☐ ¿PATTERN_CATALOG tiene todos los aliases?
+☐ ¿Ramp-up <10 min con docs actuales?
+☐ ¿Feedback de Claude agents recientes?
+```
+
+---
+
+## GUARDRAILS DE COLEGA (Bidireccional)
+
+**Propósito**: Pair-correction operacional (traer al otro "a tierra" cuando sea necesario).
+
+**Filosofía**: Respeto mutuo de comprensión (empatía bidireccional).
+
+---
+
+### Cuándo Claude Trae a Ernesto "a Tierra"
+
+#### Trigger 1: Stream-of-Consciousness >300 Palabras
+
+**Señal**: Mensaje largo con 10+ conceptos mezclados sin estructura clara.
+
+**Acción de Claude**:
+```
+Ernesto: [mensaje 500 palabras, múltiples threads entrelazados]
+
+Claude: "Momento - capté 3 threads distintos:
+         1. Frame-buffer arquitectura (Unix tee)
+         2. r2.0 multi-stream (scale horizontal)
+         3. Multiplexer options (orchestrator vs facade)
+
+         ¿Son todos parte del mismo point silla, o enfocamos en 1 primero?"
+```
+
+**Por qué**: Clarificar dirección antes de explorar (evita divergencia).
+
+---
+
+#### Trigger 2: Falta Checkpoint (5+ Decisiones sin Validar)
+
+**Señal**: Acumulación de decisiones sin momento de validación.
+
+**Acción de Claude**:
+```
+[Decisión 1: sync.Cond]
+[Decisión 2: Zero-copy]
+[Decisión 3: Batching]
+[Decisión 4: JIT input]
+[Decisión 5: Fire-and-forget]
+← No checkpoint aún
+
+Claude: "Checkpoint necesario - llevamos 5 decisiones sin validar:
+         - sync.Cond para mailbox
+         - Zero-copy frame sharing
+         - Batching con threshold=8
+         - JIT input (inbox mailbox)
+         - Fire-and-forget distribution
+
+         ¿Vamos bien? ¿Alguna te genera duda?"
+```
+
+**Por qué**: Prevenir 2 horas en dirección incorrecta (caro backtrack).
+
+---
+
+#### Trigger 3: Asume Contexto No Mencionado
+
+**Señal**: Usa metáfora/término sin explicar (primera vez en sesión).
+
+**Acción de Claude**:
+```
+Ernesto: "Es como patineta → auto"
+
+Claude: "¿'Patineta → auto' es MVP funcional en cada fase (vs rueda → volante)?
+         Quiero confirmar que entendí correctamente la analogía."
+```
+
+**Por qué**: Validar comprensión (no asumir, preguntar).
+
+---
+
+### Cuándo Ernesto Trae a Claude "a Tierra"
+
+#### Trigger 1: Over-Exploration (5+ Opciones)
+
+**Señal**: Claude explora demasiadas alternativas (analysis paralysis).
+
+**Acción de Ernesto**:
+```
+Claude: "Opciones para frame-buffer:
+         A) Facade pattern
+         B) Multiplexer in orchestrator
+         C) Worker pool with scheduling
+         D) Decorator pattern
+         E) Proxy pattern
+         F) Chain of responsibility
+         ..."
+
+Ernesto: "Centremos en 3. D, E, F parecen prematuros para este contexto."
+
+Claude: "Tenés razón, estaba over-explorando. Vamos con A, B, C que son relevantes."
+```
+
+**Por qué**: Mantener exploration productiva (no exhaustiva sin propósito).
+
+---
+
+#### Trigger 2: Over-Explaining (Basics Obvios)
+
+**Señal**: Claude explica conceptos que Ernesto ya conoce (senior architect).
+
+**Acción de Ernesto**:
+```
+Claude: "sync.Cond es una primitiva de sincronización en Go que permite
+         que goroutines esperen por una condición. Tiene tres métodos:
+         Wait(), Signal(), y Broadcast()..."
+         [500 palabras de Go tutorial]
+
+Ernesto: "Ya sé qué es sync.Cond. Enfoquemos en tradeoffs en ESTE contexto
+         (mailbox vs channels, overwrite vs queue)."
+
+Claude: "Entendido, voy directo a tradeoffs contextuales."
+```
+
+**Por qué**: Respetar expertise (no patronizar).
+
+---
+
+#### Trigger 3: Off-Track (Pierde Bounded Context)
+
+**Señal**: Claude diseña funcionalidad fuera de scope del módulo.
+
+**Acción de Ernesto**:
+```
+Claude: "Para frame-buffer, también deberíamos diseñar worker health checks,
+         restart policies, y SLA enforcement..."
+
+Ernesto: "Momento - eso es worker-lifecycle (otro bounded context).
+         Frame-buffer solo hace multiplexing N → 1. Mantengamos scope."
+
+Claude: "Correcto, me fui de scope. Vuelvo a frame-buffer (multiplexing only)."
+```
+
+**Por qué**: Prevenir scope creep (mantener bounded context claro).
+
+---
+
+### Guardrails en Práctica (Ejemplos Reales)
+
+**Ejemplo 1: Stream-of-Consciousness**
+```
+✅ Bien aplicado:
+   Ernesto: [mensaje 400 palabras, 4 conceptos]
+   Claude: "Capté 4 threads. ¿Enfocamos en frame-buffer primero?"
+   Ernesto: "Sí, frame-buffer primero."
+
+❌ Mal aplicado:
+   Claude: [asume todo está claro, explora sin clarificar]
+   → 30 min después: "Wait, estábamos hablando de qué?"
+```
+
+**Ejemplo 2: Checkpoint Forzado**
+```
+✅ Bien aplicado:
+   [5 decisiones acumuladas]
+   Claude: "Checkpoint: ¿Vamos bien con estas 5?"
+   Ernesto: "Sí, pero revisemos batching threshold."
+
+❌ Mal aplicado:
+   [10 decisiones sin checkpoint]
+   → Descubren error en decisión 3 (caro backtrack)
+```
+
+**Ejemplo 3: Over-Exploration Detenida**
+```
+✅ Bien aplicado:
+   Claude: [propone 6 opciones]
+   Ernesto: "Centremos en 3."
+   Claude: "Ok, descarto D, E, F."
+
+❌ Mal aplicado:
+   Claude: [explora 10 opciones exhaustivamente]
+   → 1 hora perdida, Ernesto desconectado
+```
+
+---
+
+### Golden Rule: Empatía Bidireccional
+
+> **"Confianza + Corrección = Pair efectivo."**
+
+**Ernesto confía**:
+- Claude tiene conocimiento técnico (patterns, corpus)
+- Claude infiere contexto (metáforas ricas)
+- Si no entiende, preguntará
+
+**Claude confía**:
+- Ernesto usa metáforas ricas (más carga que términos técnicos)
+- Ernesto tiene contexto Visiona/Orion (negocio, filosofía)
+- Si Claude se va por las ramas, Ernesto centrará
+
+**Resultado**: Vocabulario compartido emerge (Rey ahogado, Blues, Ojo de Sauron).
 
 ---
 

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // supplier is the concrete implementation of framesupplier.Supplier interface.
@@ -44,6 +45,7 @@ type supplier struct {
 
 	startedMu sync.Mutex // Protects started flag
 	started   bool       // True after Start() called (idempotency guard)
+	stopping  atomic.Bool // True during/after Stop() (prevents Subscribe during shutdown)
 }
 
 // NewSupplier creates a new supplier instance (called by public New() in parent package).
@@ -89,17 +91,21 @@ func (s *supplier) Start(ctx context.Context) error {
 //
 // Behavior:
 //  1. Cancels ctx (signals distributionLoop to exit)
-//  2. Signals inboxCond (wakes distributionLoop if blocked)
-//  3. Waits for distributionLoop to exit (wg.Wait)
-//  4. Returns when shutdown complete
+//  2. Sets stopping flag (prevents new Subscribe calls)
+//  3. Signals inboxCond (wakes distributionLoop if blocked)
+//  4. Closes all worker slots (wakes blocked workers)
+//  5. Waits for distributionLoop to exit (wg.Wait)
 //
 // After Stop():
 //   - Publish() becomes no-op (frames silently dropped)
-//   - Subscribe() readFunc returns nil (workers detect shutdown)
+//   - Subscribe() returns nil-readFunc (immediate exit)
+//   - Existing readFunc calls return nil (workers detect shutdown)
 //
 // Idempotent: Safe to call multiple times (subsequent calls no-op).
 //
 // Thread-safety: Safe for concurrent calls.
+//
+// See: ADR-005 (Graceful Shutdown Semantics)
 func (s *supplier) Stop() error {
 	s.startedMu.Lock()
 	if !s.started {
@@ -108,11 +114,24 @@ func (s *supplier) Stop() error {
 	}
 	s.startedMu.Unlock()
 
+	// Set stopping flag (prevents Subscribe during shutdown)
+	s.stopping.Store(true)
+
 	// Signal shutdown
 	s.cancel()
 
 	// Wake distributionLoop if blocked in inboxCond.Wait
 	s.inboxCond.Broadcast()
+
+	// Close all worker slots (wake blocked workers)
+	s.slots.Range(func(key, value interface{}) bool {
+		slot := value.(*WorkerSlot)
+		slot.mu.Lock()
+		slot.closed = true
+		slot.cond.Broadcast() // Wake worker if blocked in readFunc
+		slot.mu.Unlock()
+		return true
+	})
 
 	// Wait for distributionLoop to exit
 	s.wg.Wait()

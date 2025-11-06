@@ -83,6 +83,7 @@ func (s *supplier) publishToSlot(slot *WorkerSlot, frame *Frame) {
 //   - Mailbox pattern: single-slot buffer, overwrite on publish
 //   - Blocking consume: readFunc() blocks until frame available
 //   - Graceful shutdown: returns nil when closed (Unsubscribe or Stop)
+//   - Safe degradation: returns nil-readFunc if called during/after Stop()
 //
 // Thread-safety:
 //   - Subscribe: Safe for concurrent calls (sync.Map.Store)
@@ -92,8 +93,14 @@ func (s *supplier) publishToSlot(slot *WorkerSlot, frame *Frame) {
 //   - Worker MUST call Unsubscribe when done (defer pattern recommended)
 //   - Worker MUST NOT call readFunc concurrently (single consumer only)
 //
-// See: ADR-001 (sync.Cond), ARCHITECTURE.md (Algorithm 4)
+// See: ADR-001 (sync.Cond), ADR-005 (Graceful Shutdown), ARCHITECTURE.md (Algorithm 4)
 func (s *supplier) Subscribe(workerID string) func() *Frame {
+	// Check if supplier is stopping (fail-fast)
+	if s.stopping.Load() {
+		// Return nil-readFunc (immediate exit, no goroutine leak)
+		return func() *Frame { return nil }
+	}
+
 	// Create new slot for this worker
 	slot := &WorkerSlot{}
 	slot.cond = sync.NewCond(&slot.mu)

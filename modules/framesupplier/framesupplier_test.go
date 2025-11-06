@@ -383,6 +383,158 @@ func TestGracefulShutdown(t *testing.T) {
 	t.Logf("✅ Graceful shutdown validated (Stop took %v)", stopElapsed)
 }
 
+// TestSubscribeDuringStop validates that Subscribe() called during Stop() returns safe nil-readFunc.
+//
+// Test scenario (ADR-005):
+//  1. Start supplier
+//  2. Start Stop() in goroutine
+//  3. Subscribe() concurrently (after stopping=true)
+//  4. Assert: readFunc immediately returns nil (safe degradation)
+//  5. Assert: No goroutine leak
+//
+// See: ADR-005 (Graceful Shutdown Semantics)
+func TestSubscribeDuringStop(t *testing.T) {
+	supplier := framesupplier.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := supplier.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	// Start Stop() in goroutine (will set stopping flag)
+	stopDone := make(chan struct{})
+	go func() {
+		supplier.Stop()
+		close(stopDone)
+	}()
+
+	// Wait a bit for Stop() to set stopping flag
+	time.Sleep(10 * time.Millisecond)
+
+	// Subscribe during shutdown
+	readFunc := supplier.Subscribe("RaceWorker")
+
+	// Assert: readFunc returns nil immediately (no blocking)
+	frameChan := make(chan *framesupplier.Frame)
+	go func() {
+		frameChan <- readFunc()
+	}()
+
+	select {
+	case frame := <-frameChan:
+		if frame != nil {
+			t.Errorf("readFunc returned non-nil frame during shutdown: %+v", frame)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Error("readFunc blocked during shutdown (expected immediate nil)")
+	}
+
+	// Wait for Stop() to complete
+	<-stopDone
+
+	t.Log("✅ Subscribe during Stop() returned safe nil-readFunc")
+}
+
+// TestUnsubscribeAfterStop validates that Unsubscribe() is idempotent after Stop().
+//
+// Test scenario (ADR-005):
+//  1. Subscribe worker
+//  2. Call Stop() (closes slot)
+//  3. Call Unsubscribe() (idempotent)
+//  4. Assert: No panic, no double-close issues
+//
+// See: ADR-005 (Graceful Shutdown Semantics - Idempotency Analysis)
+func TestUnsubscribeAfterStop(t *testing.T) {
+	supplier := framesupplier.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := supplier.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	// Subscribe worker
+	workerID := "TestWorker"
+	readFunc := supplier.Subscribe(workerID)
+
+	// Worker goroutine
+	workerExited := make(chan struct{})
+	go func() {
+		defer close(workerExited)
+		for {
+			frame := readFunc()
+			if frame == nil {
+				break
+			}
+		}
+	}()
+
+	// Stop (closes slot)
+	err = supplier.Stop()
+	if err != nil {
+		t.Fatalf("Stop() failed: %v", err)
+	}
+
+	// Wait for worker to exit
+	<-workerExited
+
+	// Unsubscribe after Stop (idempotent)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("Unsubscribe() panicked after Stop(): %v", r)
+			}
+		}()
+		supplier.Unsubscribe(workerID)
+	}()
+
+	t.Log("✅ Unsubscribe after Stop() is idempotent (no panic)")
+}
+
+// TestMultipleStopCalls validates that Stop() is idempotent.
+//
+// Test scenario (ADR-005):
+//  1. Start supplier
+//  2. Call Stop() twice
+//  3. Assert: Second call is no-op
+//  4. Assert: No panic
+//
+// See: ADR-005 (Graceful Shutdown Semantics - Idempotency)
+func TestMultipleStopCalls(t *testing.T) {
+	supplier := framesupplier.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := supplier.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	// First Stop()
+	err = supplier.Stop()
+	if err != nil {
+		t.Fatalf("First Stop() failed: %v", err)
+	}
+
+	// Second Stop() (idempotent)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("Second Stop() panicked: %v", r)
+			}
+		}()
+		err = supplier.Stop()
+		if err != nil {
+			t.Errorf("Second Stop() returned error: %v", err)
+		}
+	}()
+
+	t.Log("✅ Multiple Stop() calls are idempotent (no panic)")
+}
+
 // TestUnsubscribeWakesWorker validates Unsubscribe() wakes blocked worker.
 //
 // Scenario:

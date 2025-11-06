@@ -1,6 +1,6 @@
 # ADR-005: Graceful Shutdown Semantics
 
-**Status**: Proposed (Pending Discovery Session)
+**Status**: Accepted
 **Date**: 2025-01-05
 **Authors**: Ernesto + Gaby
 **Trigger**: TestGracefulShutdown detected bug in Stop() implementation
@@ -12,6 +12,7 @@
 | Version | Date       | Author          | Changes                           |
 |---------|------------|-----------------|-----------------------------------|
 | 0.1     | 2025-01-05 | Ernesto + Gaby  | Initial proposal (bug discovered) |
+| 1.0     | 2025-01-05 | Ernesto + Gaby  | Decision: Option A accepted       |
 
 ---
 
@@ -287,131 +288,362 @@ func (s *supplier) Stop() error {
 
 ---
 
-## Open Questions (For Discovery Session)
+## Decision
 
-### Architectural Questions
+**We accept Option A: Stop() Closes All Slots**
 
-1. **Bounded Context**: Is worker lifecycle part of FrameSupplier's responsibility?
-   - Current: FrameSupplier only distributes frames
-   - Proposed: FrameSupplier also manages worker exit semantics
+### Rationale
 
-2. **Coupling**: Should `Stop()` know about workers, or only distributionLoop?
-   - Philosophy: "Inbox and slots are symmetric JIT mailboxes"
-   - But: Inbox wake is internal (distributionLoop), slot wake is external (workers)
+#### 1. Architectural Symmetry (ADR-004 Alignment)
 
-3. **Contract Clarity**: What does "graceful shutdown" mean?
-   - A: Stop() blocks until all workers Unsubscribe (caller ensures)
-   - B: Stop() forces workers to exit (supplier ensures)
-   - C: Stop() + ctx.Done (hybrid, both participate)
+**ADR-004 established symmetric JIT architecture**:
+```
+Inbox Lifecycle:
+  Create: Start() spawns distributionLoop
+  Destroy: Stop() → ctx.Done → inboxCond.Broadcast → distributionLoop exits ✅
 
-### Implementation Questions
+Worker Slots Lifecycle:
+  Create: Subscribe() creates slot
+  Destroy: ??? (was undefined) ❌
+```
 
-4. **Race Conditions**: What if `Subscribe()` called during `Stop()`?
-   - Should Subscribe() check `s.started` flag?
-   - Should Subscribe() fail if supplier stopping?
+**Decision restores symmetry**:
+- If FrameSupplier creates something (inbox, slots), FrameSupplier destroys it
+- "Casa de herrero, cuchillo de acero" applies to lifecycle management, not just JIT semantics
 
-5. **Idempotency**: If worker calls `Unsubscribe()` after `Stop()` closed slot?
-   - Current Unsubscribe: Idempotent (safe)
-   - With Stop() closing: Still idempotent? (need test)
+#### 2. Bounded Context Clarification
 
-6. **Breaking Changes**: Is Subscribe(ctx, workerID) acceptable?
-   - We're pre-v1.0 (backward compat not critical)
-   - But: All examples/clients need update
+**Question**: Does closing slots expand FrameSupplier's bounded context?
 
-### Testing Questions
+**Analysis**:
+- ✅ **Slot lifecycle** = create/destroy slot data structures → Already FrameSupplier's responsibility (Subscribe creates slots)
+- ❌ **Worker lifecycle** = restart policies, health monitoring, SLA enforcement → Different module (worker-lifecycle)
 
-7. **Deterministic Testing**: How do we test without timing dependencies?
-   - Current test: Time.Sleep + timeout (brittle)
-   - Better: Controllable distributionLoop (inject pause?)
-
-8. **Race Detector**: Will Option A introduce new races?
-   - `Stop()` iterates slots while `Subscribe()`/`Unsubscribe()` mutate
-   - sync.Map is safe, but `slot.mu` locking order?
+**Conclusion**: Slot lifecycle ≠ Worker lifecycle. Completing the create→destroy cycle is consistency, not scope creep.
 
 ---
 
-## Context from Other Systems
+#### 2.1 Worker Agency (Post-Shutdown Behavior)
 
-### Orion v1.x Pattern
+**Critical distinction**: FrameSupplier **notifies** shutdown, does NOT **control** worker behavior post-shutdown.
 
-**Orion v1** (core/orion.go) uses **explicit Unsubscribe**:
+**When readFunc returns nil**:
 ```go
-// In worker goroutine
-defer worker.Stop()  // Calls Unsubscribe internally
+// Worker has AGENCY here (not controlled by FrameSupplier)
+frame := readFunc()
+if frame == nil {
+    // Option 1: Report to orchestrator, wait for instructions
+    // Option 2: Exit immediately (fast fail)
+    // Option 3: Retry Subscribe (reconnect attempt)
+
+    // Worker + Worker-Orchestrator decide (not FrameSupplier)
+}
+```
+
+**System Architecture** (peer bounded contexts, not hierarchical):
+```
+Stream-Capture ←→ FrameSupplier ←→ Workers ←→ Worker-Orchestrator
+
+Each with independent responsibilities:
+- FrameSupplier: Distribution (JIT, mailbox, drop policy)
+- Workers: Inference execution
+- Worker-Orchestrator: Lifecycle (restart, SLA, health monitoring)
+```
+
+**FrameSupplier responsibilities** (✅ what we DO):
+- Distribute frames via JIT semantics
+- Notify shutdown (close slots → readFunc returns nil)
+- Track operational metrics (drops, idle detection)
+
+**FrameSupplier NON-responsibilities** (❌ what we DON'T do):
+- Decide if worker should retry (orchestrator's responsibility)
+- Guarantee worker resiliency (worker + orchestrator)
+- Monitor worker health post-shutdown (orchestrator)
+
+**Implication for Stop()**:
+- Closing slots = fulfilling distribution contract ("no more frames")
+- NOT controlling worker fate (worker decides: exit, retry, report to orchestrator)
+- Resiliency handled by Worker-Orchestrator module (future ADR)
+
+**This validates Option A**: We close slots to complete OUR bounded context (distribution lifecycle), not to manage THEIR bounded context (worker lifecycle).
+
+**Future Work**: Worker-Orchestrator module will handle events like:
+```go
+orchestrator.OnWorkerEvent(WorkerDisconnected{
+    workerID: "person-detector",
+    reason: "supplier_stopped",  // Event from FrameSupplier
+})
+
+// Orchestrator decides response based on SLA:
+// - Critical worker? Escalate to Orion core (restart FrameSupplier)
+// - BestEffort worker? Accept degradation, continue
+// - Transient issue? Wait and retry Subscribe
+```
+
+#### 3. Contract Fulfillment
+
+**Public API contract** (framesupplier.go:97):
+```go
+// After Stop():
+//   - Subscribe() readFunc returns nil (workers detect shutdown)
+```
+
+**Only Option A guarantees this**:
+- Option B (ctx.Done): Workers blocked IN `cond.Wait()` cannot check ctx between calls
+- Option C (hybrid): Solves problem but adds breaking change + complexity
+- Option D (timeout): Violates <2s latency requirement
+
+#### 4. Simplicity at Macro Level
+
+**KISS applies at API level**:
+- ✅ No breaking changes (Subscribe signature unchanged)
+- ✅ Workers use existing pattern: `if frame == nil { break }`
+- ✅ No timeout logic, no dual exit paths
+
+**Complexity localized inside Stop()** (50 LOC to close slots) is acceptable.
+
+---
+
+## Implementation
+
+### Core Changes to Stop()
+
+```go
+type Supplier struct {
+    // Existing fields...
+    stopping atomic.Bool  // NEW: Prevent Subscribe during Stop
+}
+
+func (s *Supplier) Stop() error {
+    // 1. Set stopping flag (blocks new subscriptions)
+    s.stopping.Store(true)
+
+    // 2. Cancel context (signals distributionLoop)
+    s.cancel()
+
+    // 3. Wake distributionLoop
+    s.inboxCond.Broadcast()
+
+    // 4. Close all worker slots (NEW)
+    s.slots.Range(func(key, value interface{}) bool {
+        slot := value.(*WorkerSlot)
+        slot.mu.Lock()
+        slot.closed = true
+        slot.cond.Broadcast()  // Wake blocked workers
+        slot.mu.Unlock()
+        return true
+    })
+
+    // 5. Wait for distributionLoop to exit
+    s.wg.Wait()
+
+    return nil
+}
+```
+
+### Race Condition: Subscribe During Stop
+
+**Problem**: Subscribe() called concurrently with Stop() creates slot that never closes.
+
+**Solution**: Safe degradation via stopping flag
+
+```go
+func (s *Supplier) Subscribe(workerID string) func() *Frame {
+    // Check if supplier is stopping
+    if s.stopping.Load() {
+        // Return readFunc that always returns nil (safe degradation)
+        return func() *Frame { return nil }
+    }
+
+    // Normal slot creation...
+    slot := &WorkerSlot{cond: sync.NewCond(&sync.Mutex{})}
+    s.slots.Store(workerID, slot)
+
+    return func() *Frame {
+        slot.mu.Lock()
+        defer slot.mu.Unlock()
+
+        for slot.frame == nil && !slot.closed {
+            slot.cond.Wait()
+        }
+
+        if slot.closed {
+            return nil  // Stop() or Unsubscribe() called
+        }
+
+        frame := slot.frame
+        slot.frame = nil
+        return frame
+    }
+}
+```
+
+**Rationale**: Safe degradation > panic. Worker subscribing after Stop() receives no-op readFunc (immediately returns nil).
+
+---
+
+### Idempotency: Unsubscribe After Stop
+
+**Scenario**:
+```go
+readFunc := supplier.Subscribe(workerID)
+defer supplier.Unsubscribe(workerID)  // Always deferred
 
 for {
     frame := readFunc()
-    if frame == nil { break }
+    if frame == nil { break }  // Stop() closed slot
     process(frame)
 }
+// defer runs: Unsubscribe on already-closed slot
 ```
 
-**Pattern**: Workers own their lifecycle, not supplier.
-
-**Question**: Should FrameSupplier follow this pattern, or improve it?
-
----
-
-### Actor Model (Erlang/Akka)
-
-**Erlang**: Supervisor kills actors on shutdown (forced).
-
-**Akka**: Graceful stop sends PoisonPill, waits timeout, then kills.
-
-**Question**: Should we adopt timeout + force-close (Option D)?
-
----
-
-### Go Patterns
-
-**http.Server.Shutdown()**:
+**Current Unsubscribe (already idempotent)**:
 ```go
-func (s *Server) Shutdown(ctx context.Context) error {
-    // 1. Stop accepting new connections
-    // 2. Wait for active requests to complete (with ctx timeout)
-    // 3. Force-close after timeout
+func (s *Supplier) Unsubscribe(workerID string) {
+    val, ok := s.slots.Load(workerID)
+    if !ok { return }  // Idempotent: already unsubscribed
+
+    slot := val.(*WorkerSlot)
+    slot.mu.Lock()
+    slot.closed = true      // Idempotent: setting true → true (no-op)
+    slot.cond.Broadcast()   // Idempotent: multiple broadcasts safe
+    slot.mu.Unlock()
+
+    s.slots.Delete(workerID)
 }
 ```
 
-**Pattern**: Graceful with timeout + force fallback.
-
-**Question**: Should FrameSupplier.Stop() take `context.Context` parameter?
+**Conclusion**: No changes needed. Unsubscribe is already safe to call on Stop()-closed slots.
 
 ---
 
-## Constraints
+## Consequences
 
-### Non-Negotiable
+### Positive ✅
 
-1. **Thread-safety**: Stop() must be safe concurrent with Subscribe/Unsubscribe/Publish
-2. **No panics**: Stop() must never panic (even if workers misbehave)
-3. **Idempotency**: Multiple Stop() calls must be safe
+1. **Contract Compliance**: `readFunc()` returns nil after Stop() (workers exit cleanly)
+2. **Architectural Symmetry**: Inbox and slots both have complete create→destroy lifecycle
+3. **No Breaking Changes**: Subscribe API unchanged (backward compatible)
+4. **Fail-Fast**: Workers exit immediately (<100ms) when Stop() called
+5. **Thread-Safe**: atomic.Bool + Range + per-slot mutex prevents races
 
-### Desired
+### Negative ❌
 
-4. **Simplicity**: Prefer simple solution (KISS at macro level)
-5. **Backward compat**: Minimize breaking changes (but not critical pre-v1.0)
-6. **Fail-fast**: Workers should exit quickly (<100ms) on Stop()
+1. **Coupling**: Stop() now knows about worker slots (but slots already managed by Supplier)
+2. **Complexity**: +15 LOC in Stop() (Range + close logic)
+3. **Testing**: Need tests for Subscribe-during-Stop race condition
+
+### Mitigation
+
+**Complexity**: Localized inside Stop() (API remains simple)
+**Testing**: Add TestSubscribeDuringStop, TestUnsubscribeAfterStop
 
 ---
 
-## Success Criteria (Post-Discovery)
+## Alternatives Rejected
 
-After discovery session, we should be able to:
+### Option B: Workers Handle ctx.Done()
 
-1. ✅ Choose one option (A/B/C/D) with clear rationale
-2. ✅ Document decision in this ADR (update to "Accepted")
-3. ✅ Update implementation (coding session)
-4. ✅ Update TestGracefulShutdown to pass
-5. ✅ Add new tests for edge cases (race conditions, idempotency)
+**Proposal**: Document pattern where workers check ctx.Done() before readFunc()
+
+**Why Rejected**:
+- ❌ Workers blocked IN `cond.Wait()` cannot check ctx
+- ❌ Contract violation: readFunc() doesn't return nil (returns NEVER)
+- ❌ Requires caller discipline (easy to forget ctx.Done check)
+
+---
+
+### Option C: Hybrid (Stop + ctx-aware readFunc)
+
+**Proposal**: Stop() closes slots + Subscribe(ctx, workerID) signature change
+
+**Why Rejected**:
+- ❌ Breaking change (all examples, clients need update)
+- ❌ Complexity: readFunc checks TWO conditions (slot.closed AND ctx.Err())
+- ❌ No clear benefit over Option A (which already solves problem)
+
+---
+
+### Option D: Stop() Timeout with Force-Close
+
+**Proposal**: Wait 5s for workers to Unsubscribe, then force-close
+
+**Why Rejected**:
+- ❌ Violates Orion philosophy: <2s latency requirement (5s timeout too slow)
+- ❌ Hides bugs: Workers not calling Unsubscribe pass silently (not fail-fast)
+- ❌ Complexity: timeout + polling loop
+
+---
+
+## Testing Strategy
+
+### New Tests Required
+
+1. **TestGracefulShutdown** (update existing):
+   - Subscribe worker (blocks in readFunc, no frames)
+   - Call Stop()
+   - Assert: readFunc returns nil within 100ms
+   - Assert: Worker goroutine exits cleanly
+
+2. **TestSubscribeDuringStop** (new):
+   - Start Stop() in goroutine
+   - Subscribe() concurrently (after stopping=true)
+   - Assert: readFunc immediately returns nil (safe degradation)
+   - Assert: No goroutine leak
+
+3. **TestUnsubscribeAfterStop** (new):
+   - Subscribe worker
+   - Call Stop() (closes slot)
+   - Call Unsubscribe() (idempotent)
+   - Assert: No panic, no double-close issues
+
+4. **TestMultipleStopCalls** (idempotency):
+   - Call Stop() twice
+   - Assert: Second call is no-op
+   - Assert: No panic
+
+---
+
+## Implementation Checklist (Next Coding Session)
+
+- [ ] Add `stopping atomic.Bool` to Supplier struct
+- [ ] Update `Stop()`: Set stopping flag, Range over slots, close + broadcast
+- [ ] Update `Subscribe()`: Check stopping flag, return nil-readFunc if stopping
+- [ ] Update TestGracefulShutdown (ensure it passes)
+- [ ] Add TestSubscribeDuringStop
+- [ ] Add TestUnsubscribeAfterStop
+- [ ] Add TestMultipleStopCalls
+- [ ] Update ARCHITECTURE.md (Stop() lifecycle section)
+
+---
+
+## Emergent Insights (Post-Decision)
+
+### Worker Agency Pattern
+
+**Origin**: Café retrospective after accepting Option A
+
+**Insight**: FrameSupplier notifies (via nil readFunc), workers + orchestrator control post-shutdown behavior.
+
+**Portability**:
+- Applies to all Orion 2.0 peer modules (no hierarchical control)
+- Pattern: "Notification vs Control" - bounded contexts notify each other, don't control
+- Future: Worker-Orchestrator design benefits from this clarity
+
+**Why gold**: Prevents scope creep in future (FrameSupplier won't accumulate worker management responsibilities).
+
+**Named Pattern**: **"Notification Contract in Peer Architecture"**
+- Module A notifies Module B via contract (readFunc → nil)
+- Module B has agency over response (exit, retry, escalate)
+- Module C (orchestrator) handles resiliency policies
 
 ---
 
 ## Related Decisions
 
-- **ADR-001**: sync.Cond for Mailbox Semantics (affects wake mechanism)
-- **ADR-004**: Symmetric JIT Architecture (inbox vs slots symmetry)
-- **Future ADR-006?**: Worker Lifecycle Management (if coupling increases)
+- **ADR-001**: sync.Cond for Mailbox Semantics (slot.cond.Broadcast used here)
+- **ADR-004**: Symmetric JIT Architecture (this decision restores symmetry)
+- **Future ADR** (Worker-Orchestrator): Will leverage "supplier_stopped" events
 
 ---
 
@@ -424,25 +656,4 @@ After discovery session, we should be able to:
 
 ---
 
-## Notes for Discovery Session
-
-**Entry point (Point Silla)**:
-> "TestGracefulShutdown found that Stop() doesn't wake workers.
-> ¿Stop() debe cerrar slots (Option A), o workers manejan ctx (Option B), o hybrid?
-> Pensaba en Option A (más simple)... ¿qué te parece?"
-
-**Key tradeoffs to explore**:
-- Bounded context (distribution only vs distribution + lifecycle)
-- Coupling (Stop knows about workers vs workers autonomous)
-- Breaking changes (Subscribe signature vs backward compat)
-- Complexity (simple force-close vs timeout + fallback)
-
-**Expected output**:
-- Chosen option with rationale
-- Edge cases identified
-- Implementation plan
-- Test strategy
-
----
-
-**Status**: Pending discovery session (scheduled for next pairing)
+**Review Status**: ✅ Accepted (Ready for Implementation)

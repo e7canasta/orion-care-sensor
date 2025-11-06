@@ -6,6 +6,17 @@
 
 ---
 
+## 🎯 For Claude Agents: Read Before Starting
+
+**Module-specific context**:
+1. **[Global CLAUDE_CONTEXT.md](../../CLAUDE_CONTEXT.md)** - AI-to-AI patterns (HOW to pair with Ernesto) - **READ FIRST**
+2. **[PAIR_DISCOVERY_PROTOCOL.md](../../PAIR_DISCOVERY_PROTOCOL.md)** - Discovery process
+3. **This document** - FrameSupplier module specifics
+
+**Expected ramp-up**: <5 minutes (global context) + <5 minutes (module context) = <10 minutes total.
+
+---
+
 ## How to Work with Claude: Session Types
 
 This module supports two types of pairing sessions. **Claude should detect which type based on Ernesto's initial message.**

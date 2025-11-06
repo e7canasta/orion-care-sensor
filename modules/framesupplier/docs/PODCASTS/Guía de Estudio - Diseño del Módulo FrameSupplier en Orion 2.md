@@ -1,0 +1,70 @@
+# Guía de Estudio: Diseño del Módulo FrameSupplier en Orion 2.0
+
+## Cuestionario de Repaso
+
+Responda las siguientes preguntas en 2 o 3 oraciones, basándose exclusivamente en el contexto de diseño provisto.
+
+1. ¿Por qué se descartó el patrón de canales con `select/default` a pesar de ser idiomático en Go para operaciones no bloqueantes?
+2. Explique la metáfora del "humano viendo una escena en tiempo real" y cómo definió la semántica del `FrameSupplier`.
+3. ¿Cuál fue el requisito "no negociable" relacionado con el rendimiento y qué contrato de diseño impuso sobre los frames publicados?
+4. Describa la estrategia de "batching con umbral" implementada en la función `Publish` y la justificación de negocio para el umbral de 8.
+5. ¿Qué es el "invariante físico del sistema" y por qué su análisis llevó a descartar el uso de `sync.WaitGroup` en la función `Publish`?
+6. Explique la paradoja "En casa de herrero, cuchillo de palo" en el contexto del `FrameSupplier` y la solución de "JIT simétrico".
+7. ¿Cuál fue la función del `inbox` interno añadido en el rediseño final del `FrameSupplier` y qué problema de diseño resolvió?
+8. ¿Cuál es el propósito principal de las métricas operacionales (ej. `ConsecutiveDrops`, `LastConsumedAt`) que expone el `FrameSupplier`?
+9. Defina la filosofía de diseño "Blues" y cómo equilibra la estructura con la improvisación en la arquitectura de software.
+10. ¿Qué rol cumplen los "Bounded Contexts" o "rieles guía" en la filosofía de diseño del proyecto Orion 2.0?
+
+--------------------------------------------------------------------------------
+
+## Clave de Respuestas
+
+1. **¿Por qué se descartó el patrón de canales con** `**select/default**` **a pesar de ser idiomático en Go para operaciones no bloqueantes?** El patrón de canales fue descartado porque implementa una semántica de cola (queue), donde se descartan frames solo si el buffer está lleno. La necesidad real del sistema era una semántica de buzón (mailbox) con sobrescritura, donde cada worker siempre debe acceder al frame más reciente, reemplazando cualquier frame anterior no consumido.
+2. **Explique la metáfora del "humano viendo una escena en tiempo real" y cómo definió la semántica del** `**FrameSupplier**`**.** La metáfora ilustra que, al observar una escena en vivo, una persona pierde información entre vistazos y siempre percibe el "ahora", sin poder rebobinar. Esto definió que el `FrameSupplier` no debía encolar frames, sino proveer siempre el más reciente a cada worker, sobrescribiendo los anteriores para minimizar la latencia, priorizándola sobre la completitud de los datos.
+3. **¿Cuál fue el requisito "no negociable" relacionado con el rendimiento y qué contrato de diseño impuso sobre los frames publicados?** El requisito no negociable era el "cero-copy" (zero-copy) dentro del ecosistema Go para competir con herramientas de bajo nivel como GStreamer. Para lograrlo, se comparten punteros a los frames en lugar de copiar los datos, lo que impuso un contrato estricto de inmutabilidad: una vez que un frame es publicado, ni el publicador ni los workers deben modificar sus datos.
+4. **Describa la estrategia de "batching con umbral" implementada en la función** `**Publish**` **y la justificación de negocio para el umbral de 8.** La estrategia consiste en notificar a los workers de forma secuencial si hay 8 o menos, y en paralelo mediante goroutines en lotes de 8 si hay más. El umbral de 8 se eligió porque el costo de 8 notificaciones secuenciales es aceptable y comparable al de lanzar una goroutine, alineándose además con el contexto de negocio donde las fases iniciales (POC y expansión) tendrían menos de 8 workers.
+5. **¿Qué es el "invariante físico del sistema" y por qué su análisis llevó a descartar el uso de** `**sync.WaitGroup**` **en la función** `**Publish**`**?** El invariante físico es la observación de que el tiempo de ejecución de la función `Publish` (aprox. 100 microsegundos) es órdenes de magnitud menor que el intervalo entre frames (ej. 33,000 microsegundos a 30fps). Esto hace físicamente imposible que la notificación de un frame `T+1` adelante a la de un frame `T`, por lo que esperar con `sync.WaitGroup` solo añadiría latencia artificial sin aportar beneficios de ordenamiento.
+6. **Explique la paradoja "En casa de herrero, cuchillo de palo" en el contexto del** `**FrameSupplier**` **y la solución de "JIT simétrico".** La paradoja surgió al notar que el `FrameSupplier` implementaba una política Just-In-Time (JIT) de "siempre el último frame", pero podría recibir frames viejos de su publicador si este usaba un buffer grande. La solución fue propagar la filosofía JIT a toda la cadena, estableciendo un contrato claro con el publicador y ofreciendo una utilidad (`ConsumeJIT`) para asegurar que solo se publiquen los frames más frescos.
+7. **¿Cuál fue la función del** `**inbox**` **interno añadido en el rediseño final del** `**FrameSupplier**` **y qué problema de diseño resolvió?** El `inbox` interno es un buzón con capacidad para un solo frame que recibe las llamadas de `Publish` externas. Su función es desacoplar totalmente al publicador (ej. `stream-capture`) de la lógica de distribución a los workers, garantizando que `Publish` sea una operación no bloqueante y extremadamente rápida (aprox. 1 microsegundo), manteniendo así la simetría JIT en toda la arquitectura.
+8. **¿Cuál es el propósito principal de las métricas operacionales (ej.** `**ConsecutiveDrops**`**,** `**LastConsumedAt**`**) que expone el** `**FrameSupplier**`**?** El propósito no es realizar benchmarking del rendimiento de la IA, sino monitorear la "salud" operacional de los workers. Estas métricas permiten a un módulo externo (como un `Worker Lifecycle Manager`) detectar si un worker está atascado o ha dejado de consumir frames, lo cual es crítico para tomar acciones como reiniciarlo, especialmente en un sistema donde algunos workers tienen SLAs de cero tolerancia a fallos.
+9. **Defina la filosofía de diseño "Blues" y cómo equilibra la estructura con la improvisación en la arquitectura de software.** La filosofía "Blues" es una metáfora para un enfoque de diseño que equilibra una estructura base sólida (bounded contexts, ADRs, principios claros) con la improvisación (tomar decisiones de "óptimo local" basadas en el contexto del momento). Al igual que en la música blues, se tiene una escala y un ritmo definidos (la estructura) dentro de los cuales se puede improvisar (las decisiones de diseño), evitando tanto la rigidez dogmática como el caos sin cohesión.
+10. **¿Qué rol cumplen los "Bounded Contexts" o "rieles guía" en la filosofía de diseño del proyecto Orion 2.0?** Los Bounded Contexts actúan como "rieles guía" que definen responsabilidades claras y límites para cada módulo, como el `FrameSupplier` siendo responsable solo de la distribución. Esta estructura previene el "scope creep" y fomenta la composición de módulos pequeños y cohesivos (filosofía Unix) en lugar de crear módulos monolíticos que hacen de todo. Permiten la "improvisación" (decisiones de diseño complejas) de forma segura dentro de sus límites.
+
+--------------------------------------------------------------------------------
+
+## Preguntas de Ensayo
+
+1. Analice la evolución del diseño del `FrameSupplier`, desde la consideración inicial de canales hasta la implementación final con un `inbox` interno. Describa los tres "momentos ajá" o "clicks" más significativos que reorientaron la arquitectura y explique su impacto.
+2. La "Filosofía Blues" se describe como un equilibrio entre estructura e improvisación. Usando las decisiones sobre el `batching` (umbral de 8), el `zero-copy` (contrato de inmutabilidad) y el manejo del apagado (ADR-005), argumente cómo cada una de estas decisiones ejemplifica este equilibrio pragmático.
+3. Explore la relación entre el contexto de negocio de "Alerta Care" (sistema crítico para detección de caídas) y las decisiones técnicas tomadas. ¿Cómo influyeron las "tres verdades del negocio" (cero-copy, tracking operacional, SLAs diferentes) en la definición de los Bounded Contexts y en la priorización de la complejidad del `FrameSupplier`?
+4. Contraste el concepto de "óptimo local consciente y documentado" con la búsqueda de un "óptimo global". Explique cómo la práctica de crear ADRs para cada decisión de "óptimo local" transforma lo que podría ser una "trampa técnica" en una estrategia de "evolución consciente" y pragmatismo sostenible.
+5. El proyecto documenta no solo decisiones (ADRs) y procesos (PAIR_DISCOVERY_PROTOCOL), sino también la filosofía y patrones de colaboración (CLAUDE_CONTEXT.md). Discuta el valor de este enfoque de "documentación viva con snapshots" para un equipo compuesto por desarrolladores senior y agentes de IA, y cómo contribuye a la coherencia y evolución de la arquitectura.
+
+--------------------------------------------------------------------------------
+
+## Glosario de Términos Clave
+
+|   |   |
+|---|---|
+|Término|Definición|
+|**ADR (Architectural Decision Record)**|Registros de Decisión Arquitectónica. Documentos que capturan decisiones de diseño importantes, el contexto, las alternativas consideradas y las consecuencias, sirviendo como la "memoria de decisiones" del proyecto.|
+|**Batching con Umbral**|Estrategia de optimización donde una operación se realiza de una manera (ej. secuencial) por debajo de un umbral numérico y de otra (ej. paralela) por encima de él, para equilibrar simplicidad y escalabilidad.|
+|**Blues (Filosofía de Diseño)**|Metodología que equilibra una estructura base definida (bounded contexts, ADRs) con la improvisación (decisiones de "óptimo local" basadas en el contexto), evitando la rigidez dogmática y el caos.|
+|**Bounded Context (Contexto Delimitado)**|Un principio de diseño que define límites claros y responsabilidades únicas para cada módulo del sistema, actuando como "rieles guía" para prevenir el scope creep y fomentar la cohesión.|
+|**Café Mode (Modo Café)**|Una fase de reflexión post-decisión en una sesión de `Pair-Discovery`, donde la presión de decidir ha terminado, permitiendo que emerjan insights más profundos y conexiones ("synapses") que no eran obvios durante el debate activo.|
+|**Casa de Herrero, Cuchillo de Palo**|Metáfora usada para describir la inconsistencia de predicar una filosofía (ej. Just-In-Time) hacia afuera sin aplicarla internamente, lo que llevó a la necesidad de una arquitectura JIT simétrica.|
+|**Cero-Copy (Zero-Copy)**|Requisito de rendimiento no negociable que prohíbe la copia de datos de frames dentro de la lógica de Go. Se logra compartiendo punteros, lo que impone un estricto contrato de inmutabilidad.|
+|**Complejidad por Diseño**|Filosofía que aboga por aceptar y atacar la complejidad necesaria dentro de un bounded context claro (micro-complejidad) para lograr simplicidad y rendimiento a nivel de API (macro-simplicidad), en lugar de evitarla o introducirla accidentalmente.|
+|**ConsumeJIT**|Una función de utilidad opcional ofrecida por el `FrameSupplier` para ayudar a los publicadores a cumplir con el contrato JIT, asegurando que solo se envíe el último frame disponible de un canal con buffer.|
+|**Fire-and-Forget (Disparar y Olvidar)**|Estrategia de publicación donde el emisor lanza las notificaciones (posiblemente en goroutines) y retorna inmediatamente sin esperar a que los receptores completen su procesamiento, minimizando la latencia del publicador.|
+|**FrameSupplier**|Módulo central de Orion 2.0 responsable de la distribución no bloqueante de frames de video a múltiples workers de IA, con una política de sobrescritura para priorizar la latencia sobre la completitud.|
+|**Invariante Físico del Sistema**|Un principio de diseño basado en el análisis de latencias reales del sistema. Si el tiempo de una operación A es órdenes de magnitud menor que el intervalo de un evento B, se pueden simplificar los mecanismos de sincronización.|
+|**JIT (Just-In-Time)**|Filosofía central del `FrameSupplier`. Implica que cada componente de la cadena de procesamiento debe operar con los datos más recientes posibles, descartando información obsoleta para minimizar la latencia de extremo a extremo.|
+|**Mailbox (Modelo de Buzón)**|La semántica de concurrencia clave del `FrameSupplier`. Cada worker tiene un "buzón" con espacio para un solo frame. Un nuevo frame sobrescribe al anterior, garantizando que el worker siempre consuma la información más fresca.|
+|**Óptimo Local**|Una decisión de diseño que es la mejor solución para el contexto actual y las restricciones presentes, aunque no sea la solución "perfecta" o global. Cuando se documenta conscientemente en un ADR, se convierte en un acto de pragmatismo evolucionable.|
+|**Orion 2.0**|El sistema de inferencia de IA en tiempo real para videovigilancia en el que se enmarca el diseño del módulo `FrameSupplier`.|
+|**Pair-Discovery**|Un protocolo de colaboración para sesiones de diseño exploratorio entre un arquitecto senior y un agente de IA. Se enfoca en descubrir insights y documentar decisiones, en lugar de solo implementar un plan conocido.|
+|**Point Silla (Punto Silla)**|Un punto de entrada estratégico para una sesión de `Pair-Discovery`. Es una decisión técnica con implicaciones arquitectónicas que abre múltiples caminos de exploración sin comprometerse prematuramente con una solución.|
+|**sync.Cond (Variable de Condición)**|Primitiva de sincronización de Go utilizada en el `FrameSupplier` para implementar la semántica de buzón. Permite a los workers esperar eficientemente (sin consumir CPU) una señal de que un nuevo frame está disponible en su `WorkerSlot`.|
+|**Worker Slot**|Estructura de datos interna del `FrameSupplier`, una por cada worker suscrito. Contiene un mutex, una variable de condición (`sync.Cond`) y un puntero al último frame, implementando la lógica de buzón con sobrescritura.|
+|**YAGNI (You Ain't Gonna Need It)**|Principio que postula no añadir funcionalidad hasta que sea demostrablemente necesaria. La filosofía "Blues" lo matiza, abogando por una modularidad proactiva (bounded contexts) para habilitar la evolución futura sin predecir características específicas.|

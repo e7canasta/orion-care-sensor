@@ -1,0 +1,2797 @@
+anclar las responsabilidades arquitectónicas.
+
+
+
+
+∴ Thinking…
+
+  El usuario me está pidiendo que creemos un blueprint basado en lo aprendido de FrameSupplier para el próximo módulo responsable de la orquestación de workers.
+
+  Primero, necesito entender qué estamos haciendo:
+  1. FrameSupplier ha sido un éxito de diseño (cambió <10% entre r1.0 → r3.0)
+  2. Queremos extraer las "mejores prácticas" como blueprint/marco para el siguiente módulo
+  3. El siguiente módulo es el responsable de workers (lifecycle, orchestration)
+
+  Antes de proponer nombres, déjame pensar en la responsabilidad:
+  - Worker lifecycle (start, stop, restart, health)
+  - Worker SLA management (Critical, High, Normal, BestEffort)
+  - Worker restart policies
+  - Worker health monitoring
+  - Worker registration/discovery
+
+  Nombres posibles:
+  - WorkerLifecycle (literal, descriptivo)
+  - WorkerOrchestrator (más ambicioso, implica coordinación)
+  - WorkerSupervisor (Erlang-style, supervisa y reinicia)
+  - WorkerRegistry (si es solo registro/discovery)
+  - WorkerPool (si es gestión de pool)
+
+  Pensando en el contexto de Orion y la filosofía de bounded contexts:
+  - FrameSupplier: responsable de distribución (no creación, no lifecycle)
+  - Este módulo: responsable de lifecycle y health de workers (no distribución, no inference)
+
+  Mi intuición: WorkerSupervisor es el nombre más adecuado porque:
+  1. Refleja patrón Erlang (supervisor trees) que es conocido en Go
+  2. Scope claro: supervisa workers (lifecycle, health, restart)
+  3. No se solapa con FrameSupplier (distribución) ni con workers (inference)
+
+  4. Bounded context evidente: gestión de ciclo de vida de workers
+
+  El blueprint de desarrollo seguirá un proceso estructurado:
+  - Punto de entrada técnico claramente definido
+  - Proceso de discovery con puntos de control
+  - Cristalización mediante ADRs y documentación arquitectónica
+  - Estructura de documentación estandarizada para facilitar comprensión y mantenimiento
+
+  Principios de diseño fundamentales:
+  - Simplicidad en interfaces externas
+  - Complejidad interna justificada
+  - Invariantes físicas como guía
+  - Simetría arquitectónica
+  - Optimización de rendimiento selectiva
+  - Pensamiento desde primeros principios
+
+  Estrategias de evaluación mental durante discovery:
+  - Escalabilidad horizontal
+  - Análisis de movimientos futuros
+  - Preservación de compatibilidad
+  - Delimitación clara de responsabilidades
+
+  Estructura de Architecture Decision Record (ADR):
+  - Contexto específico del problema
+  - Decisión concreta
+  - Razonamiento contextual
+  - Consecuencias y trade-offs
+  - Ejemplos de implementación
+  - Garantía de compatibilidad
+
+  Criterios críticos de diseño:
+  - Rendimiento sobre ergonomía en infraestructura
+  - Contratos de inmutabilidad
+  - Garantías de no bloqueo
+  - Evolución sostenible del sistema
+
+  Próximo paso: convertir estos principios en blueprint ejecutable para WorkerSupervisor.
+
+  Elementos clave para documentación:
+  - Checklist de validación mental
+  - Estructura de documentación técnica
+  - Catálogo de anti-patrones identificados
+
+  Objetivo: crear documento markdown operativo y pragmático.
+
+  ---
+
+  ● Excelente momento para crystallizar el aprendizaje, Ernesto. 🎸
+
+  Nombre del Módulo: WorkerSupervisor
+
+  Bounded Context: Lifecycle, health monitoring y restart policies de workers Python
+  Anti-responsabilidades:
+  - ❌ NO distribuye frames (eso es FrameSupplier)
+  - ❌ NO ejecuta inference (eso es workers)
+  - ❌ NO maneja plano de control MQTT (eso es control-plane)
+
+  Analogía: Supervisor Erlang/OTP → supervisa workers, decide restart policies según criticality
+
+  ---
+  📘 Blueprint para Desarrollo de Módulos Críticos
+
+  Esto es el "marco de desarrollo" destilado de FrameSupplier para aplicar a WorkerSupervisor (y futuros módulos).
+
+  ---
+  1⃣ Pre-Discovery: Context Loading (5-10 min)
+
+  Checklist antes de Point Silla:
+
+  [ ] Leer ADRs de módulos upstream (ej: FrameSupplier ADR-001 a ADR-004)
+  [ ] Identificar bounded context (¿qué ES mi responsabilidad?)
+  [ ] Identificar anti-responsabilidades (¿qué NO es mi responsabilidad?)
+  [ ] Mapear interfaces con otros módulos (contratos existentes)
+  [ ] Identificar invariantes físicas del dominio (ej: inference >> distribution)
+
+  Output: 1 párrafo de bounded context + lista de anti-responsabilidades
+
+  Ejemplo WorkerSupervisor:
+  Bounded Context: Lifecycle de workers Python (spawn, health, restart según SLA)
+  Anti-responsabilidades:
+  - ❌ Frame distribution (FrameSupplier)
+  - ❌ Inference execution (workers)
+  - ❌ MQTT command handling (control-plane)
+
+  Contratos:
+  - FrameSupplier.Subscribe(workerID) → workers consumen frames
+  - WorkerSupervisor spawns workers → registra en FrameSupplier
+
+  ---
+  2⃣ Discovery Session: Structured Exploration
+
+  Template de Point Silla (entry point técnico):
+
+  ## Point Silla: [Nombre Técnico]
+
+  **Problema**: [En 1-2 líneas]
+  **Scope**: [Bounded context afectado]
+  **Abre opciones**: [3-4 alternativas a explorar]
+
+  **Ejemplo**:
+  Point Silla: Worker Restart Policies
+
+  Problema: Workers Python pueden crashear (corrupt model, OOM, etc.)
+  Scope: WorkerSupervisor lifecycle
+  Abre opciones:
+  1. KISS one-shot (restart 1 vez, luego fail)
+  2. Exponential backoff (N retries con delays)
+  3. SLA-based (Critical=3 retries, BestEffort=0)
+  4. No restart (fail-fast)
+
+  ---
+  Checkpoint Protocol (cada 3-5 decisiones):
+
+  Claude: "Checkpoint. Hasta acá decidimos:
+  1. [Decisión 1]
+  2. [Decisión 2]
+  3. [Decisión 3]
+
+  ¿Vamos bien? ¿Algo que reconsiderar?"
+
+  Named Insights (cuando emerge pattern):
+
+  Claude: "Esto es patrón [Nombre]. Lo veo aplicable porque [contexto].
+          Similar a FrameSupplier ADR-003 (threshold from business context)."
+
+  ---
+  3⃣ Tests Mentales Durante Discovery
+
+  Checklist ejecutar DURANTE exploration (no después):
+
+  [ ] Scale Horizontal: ¿Funciona con 1 worker? ¿Con 64 workers? ¿Con 1000?
+  [ ] Movimientos Futuros: ¿Qué pasa si agregamos GPU workers? ¿Multi-stream?
+  [ ] Physical Invariants: ¿Hay latencias que simplifican diseño? (ej: restart >> inference)
+  [ ] Backward Compatibility: ¿Rompe contratos con FrameSupplier? ¿Con control-plane?
+  [ ] Bounded Context: ¿Es MI responsabilidad o de otro módulo?
+  [ ] Failure Modes: ¿Qué puede fallar? ¿Cómo degrada gracefully?
+
+  Ejemplo WorkerSupervisor:
+
+  ✅ Scale: 1 worker (person detector) → 64 workers (pose, face, VLM, etc.)
+     → Restart policy NO debe hardcodear "person detector"
+
+  ✅ Movimientos Futuros: GPU workers (CUDA) tienen diferentes failure modes vs CPU
+     → SLA-based policy es extensible (no hardcodear "Python process")
+
+  ✅ Physical Invariant: Worker restart ~1-3s, inference ~50ms → restart >> inference
+     → Podemos pausar distribution durante restart sin timeout workers upstream
+
+  ✅ Backward Compat: FrameSupplier.Subscribe() no cambia
+     → WorkerSupervisor registra workers, FrameSupplier no sabe de restarts
+
+  ---
+  4⃣ ADR Template (Crystallization)
+
+  Estructura OBLIGATORIA (aprendida de FrameSupplier ADRs):
+
+  # ADR-XXX: [Título Descriptivo]
+
+  **Status**: Accepted | Proposed | Deprecated
+  **Context**: [Problema en bounded context, 2-4 líneas]
+  **Decision**: [Qué decidimos, 1 línea]
+
+  ---
+
+  ## Rationale
+
+  **Por qué en ESTE contexto** (no genérico):
+  - [Razón 1 específica al dominio]
+  - [Razón 2 con invariante física/técnica]
+  - [Razón 3 con business context]
+
+  **Alternatives Considered**:
+  - ❌ [Alternativa A]: [Por qué NO en este contexto]
+  - ❌ [Alternativa B]: [Trade-off inaceptable]
+
+  ---
+
+  ## Consequences
+
+  **Accepts** (trade-offs OK):
+  - [Trade-off 1 aceptado porque...]
+  - [Complejidad 2 justificada porque...]
+
+  **Rejects** (trade-offs NO aceptables):
+  - ✅ [Beneficio rechazado]: [Por qué no vale la pena]
+
+  ---
+
+  ## Implementation Notes
+
+  [Code snippet o pseudocode si aplica]
+
+  ---
+
+  ## Backward Compatibility
+
+  [Garantías de no romper contratos existentes]
+
+  ---
+
+  ## Future Considerations
+
+  [Cómo este ADR facilita/dificulta movimientos futuros conocidos]
+
+  ---
+  5⃣ Estructura de Documentación (Mandatory)
+
+  modules/worker-supervisor/
+  ├── CLAUDE.md                    # AI companion guide (este blueprint aplicado)
+  ├── README.md                    # Human overview
+  ├── BACKLOG.md                   # Sprint tasks
+  ├── docs/
+  │   ├── C4_MODEL.md             # High-level views (architects)
+  │   ├── ARCHITECTURE.md         # Deep dive (implementers)
+  │   └── ADR/
+  │       ├── README.md           # ADR index
+  │       └── 001-*.md            # Individual ADRs
+  └── examples/
+      └── basic_usage.go          # Working examples
+
+  Relación C4 vs ARCHITECTURE (aprendido de FrameSupplier):
+
+  | Aspecto       | C4_MODEL.md                     | ARCHITECTURE.md             | Overlap |
+  |---------------|---------------------------------|-----------------------------|---------|
+  | Audiencia     | Architects, Claude onboarding   | Implementers, debugging     | 20%     |
+  | Propósito     | Vistas visuales (C1→C4)         | Referencia técnica profunda | 30%     |
+  | Diagramas     | Contexto, containers, sequences | State machines, pipelines   | 40%     |
+  | Code examples | Class diagrams                  | Pseudocode + Go snippets    | 10%     |
+
+  Complementarios (no duplicados): C4 para big picture, ARCHITECTURE para deep dive.
+
+  ---
+  6⃣ Principios de Diseño Aprendidos
+
+  Performance is King (cuando aplica):
+  SI módulo es infraestructura crítica (FrameSupplier, WorkerSupervisor):
+    → Performance > Ergonomía
+    → Zero-copy cuando justificado
+    → Batching cuando scale lo justifica
+
+  SI módulo es aplicación (control-plane, event-emitter):
+    → Ergonomía > Performance
+    → Legibilidad > Optimización prematura
+
+  Contract vs Implementation:
+  External API: KISS (simple para cliente)
+  Internal: Complex cuando justificado (batching, zero-copy, etc.)
+
+  Justificación: bounded context + cohesión
+
+  Physical Invariants Simplify Design:
+  SI latency(A) >> interval(B):
+    → Ordering guaranteed by physics
+    → Fire-and-forget correct
+    → No explicit sync needed
+
+  Ejemplo: distribution(100µs) << inter-frame(1s @ 1fps)
+
+  Threshold from Business Context:
+  NO solo math (break-even point)
+  SÍ business phases:
+    - POC: ≤5 workers → simple
+    - Expansion: ≤10 workers → still simple
+    - Full: ≤64 workers → complex kicks in
+
+  → Threshold antes de break-even (safety margin)
+
+  ---
+  7⃣ Anti-Patterns Identificados
+
+  ❌ NO hacer (aprendido de FrameSupplier iterations):
+
+  ❌ Sobre-abstraer "por si acaso" (YAGNI)
+     → FrameSupplier NO tiene priority levels (aún)
+     → Agregamos cuando business lo demande, no antes
+
+  ❌ Optimizar sin benchmark
+     → Batching threshold=8 viene de break-even math + business context
+     → NO "me parece que 10 es mejor"
+
+  ❌ Ignorar bounded context
+     → FrameSupplier NO maneja worker health (eso es WorkerSupervisor)
+     → Cohesión > Ubicación
+
+  ❌ ADRs sin rationale en contexto
+     → NO "Industry best practice dice X"
+     → SÍ "En contexto de Orion (fall detection crítico), X porque Y"
+
+  ❌ Documentación monolítica
+     → NO ARCHITECTURE.md de 2000 líneas
+     → SÍ C4 (overview) + ARCHITECTURE (deep) + ADRs (decisiones)
+
+  ---
+  🎯 Aplicación Inmediata: WorkerSupervisor Discovery
+
+  Point Silla Propuesto:
+
+  ## Point Silla: Worker Restart Policies
+
+  **Problema**: Workers Python pueden crashear (corrupt model, Python exception, OOM).
+               Sistema debe decidir: ¿restart? ¿cuántas veces? ¿con qué delay?
+
+  **Scope**: WorkerSupervisor bounded context (lifecycle, health)
+
+  **Abre opciones**:
+  1. KISS One-Shot (restart 1 vez, luego fail)
+  2. Exponential Backoff (N retries, delays crecientes)
+  3. SLA-Based (Critical=3 retries, BestEffort=0)
+  4. No Restart (fail-fast, manual recovery)
+
+  **Context adicional**:
+  - Person detector (Critical SLA): fall detection = life-critical
+  - VLM workers (BestEffort SLA): research, no crítico
+  - Orion philosophy: "Ve, No Interpreta" → sensor debe ser confiable
+
+  Tests Mentales Aplicar:
+  [ ] Scale: 1 critical worker vs 60 BestEffort workers
+  [ ] Failure Mode: Corrupt model (persistent) vs OOM (transient)
+  [ ] Physical Invariant: restart(1-3s) >> inference(50ms)
+  [ ] Backward Compat: FrameSupplier.Subscribe() no cambia
+  [ ] Bounded Context: Health monitoring SÍ, inference execution NO
+
+  ---
+  📋 Checklist Final Pre-Coding
+
+  Antes de escribir código, validar:
+
+  [ ] Bounded context documentado (1 párrafo)
+  [ ] Anti-responsabilidades listadas (3-5 items)
+  [ ] ADRs completos (mínimo 3-4 decisiones core)
+  [ ] C4_MODEL.md con vistas C1-C3 (C4 opcional)
+  [ ] ARCHITECTURE.md con deep dive técnico
+  [ ] Tests mentales ejecutados (6 checklist items)
+  [ ] Contratos con módulos upstream/downstream definidos
+  [ ] Backward compatibility garantizada
+
+  ---
+  🎸 Analogía del Blueprint
+
+  FrameSupplier fue el blues jam session exitoso:
+  - Conocíamos las escalas (inmutability, JIT, zero-copy)
+  - Improvisamos con contexto (threshold=8, fire-and-forget)
+  - Pragmatismo (versión simple primero, batching después)
+
+  Este blueprint es "transcribir el solo":
+  - Escalas = Principios (tests mentales, ADR template)
+  - Contexto = Bounded context + physical invariants
+  - Pragmatismo = KISS external, complex internal cuando justificado
+
+  WorkerSupervisor es el próximo solo:
+  - Mismas escalas, diferente contexto (lifecycle vs distribution)
+  - Same blueprint, different module
+
+  ---
+  ¿Te sirve este blueprint como marco para arrancar WorkerSupervisor discovery?
+
+  ¿Querés que ajustemos algo del template ADR o de los tests mentales antes de empezar?
+
+---
+---
+
+∴ Thinking…
+
+  Ernesto me está dando luz verde para empezar la discovery session de WorkerSupervisor. Dice "el escenario es tuyo" - esto es una discovery session claramente.
+
+  Siguiendo el blueprint que acabamos de definir, debo:
+
+  1. Pre-Discovery: Context Loading (5-10 min)
+    - Identificar bounded context
+    - Mapear interfaces con módulos existentes (FrameSupplier, control-plane)
+    - Identificar invariantes físicas
+  2. Point Silla - Entry point técnico:
+    - Restart Policies (ya propuesto arriba)
+  3. Discovery estructurada:
+    - Explorar alternativas
+    - Aplicar tests mentales
+    - Checkpoint cada 3-5 decisiones
+    - Named insights cuando emergen
+  4. Crystallization:
+    - ADRs
+    - Architecture docs
+    - Named insights
+
+  Voy a empezar con el Point Silla de Worker Restart Policies y explorar las opciones desde first principles, pensando en el contexto de Orion (fall detection crítico, workers con diferentes SLAs).
+
+  Debo recordar:
+  - Think from first principles (not internet)
+  - Challenge proposals to enable discovery
+  - Checkpoint every 3-5 decisions
+  - En este contexto: fall detection = life-critical, VLM = best-effort
+  - Physical invariants: restart(1-3s) >> inference(50ms)
+  - Bounded context: lifecycle sí, inference execution no
+
+
+---
+---
+
+
+● 🎸 Perfecto. Arrancamos con WorkerSupervisor discovery.
+
+  ---
+  Pre-Discovery: Context Loading
+
+  Bounded Context:
+  WorkerSupervisor manages lifecycle of Python inference workers: spawn, health monitoring, restart policies, graceful shutdown. Acts as supervisor in Erlang/OTP sense.
+
+  Anti-Responsabilidades:
+  - ❌ Frame distribution (FrameSupplier)
+  - ❌ Inference execution (Python workers)
+  - ❌ MQTT command processing (control-plane)
+  - ❌ Result emission (event-emitter)
+
+  Contratos Existentes (upstream/downstream):
+  WorkerSupervisor → FrameSupplier.Subscribe(workerID)
+                     (workers consume frames)
+
+  control-plane → WorkerSupervisor.RestartWorker(workerID)
+                  (hot-reload commands)
+
+  WorkerSupervisor → Python subprocess (exec.Command)
+                     (spawn, stdin/stdout IPC)
+
+  Invariantes Físicas:
+  Worker restart: ~1-3s (spawn Python + load ONNX model)
+  Inference latency: ~20-50ms (YOLO320/640)
+  Ratio: restart >> inference (20-150×)
+
+  → Restart is expensive, inference is cheap
+  → Prefer keeping workers alive vs frequent restarts
+
+  ---
+  Point Silla: Worker Restart Policies
+
+  Problema: Workers Python pueden crashear por múltiples razones:
+  - Persistent failures: Corrupt model, missing dependencies, Python syntax error
+  - Transient failures: OOM, network timeout, race condition
+
+  Sistema debe decidir: ¿restart? ¿cuántas veces? ¿con qué delay? ¿depende del worker SLA?
+
+  Scope: WorkerSupervisor lifecycle logic
+
+  ---
+  Discovery: Explorando Alternativas
+
+  Opción 1: KISS One-Shot Restart (Orion 1.0 actual)
+
+  Behavior:
+  Worker crashes → restart 1 vez
+    → Success: resume normal operation
+    → Failure: log error, require manual intervention
+
+  ✅ Pros:
+  - Simple (5 lines of code)
+  - Fail-fast (persistent failures no causan restart loops)
+  - Transparent (operador ve problema rápido)
+
+  ❌ Cons:
+  - No distingue transient vs persistent failures
+  - Critical worker (PersonDetector) queda down por transient failure
+  - En fall detection: 1 restart fallido → sistema ciego → inaceptable
+
+  En contexto Orion:
+  - POC: Aceptable (manual recovery es viable)
+  - Producción: ¿Aceptable downtime de critical worker por OOM transient?
+
+  ---
+  Opción 2: Exponential Backoff (Industry Standard)
+
+  Behavior:
+  Attempt 1: restart immediately
+  Attempt 2: restart after 1s
+  Attempt 3: restart after 2s
+  Attempt 4: restart after 4s
+  ...
+  Max attempts: 5 (configurable)
+
+  ✅ Pros:
+  - Resilient a transient failures (OOM, network glitch)
+  - Standard pattern (Kubernetes, systemd)
+  - Configurable (max attempts, backoff factor)
+
+  ❌ Cons:
+  - Persistent failures causan ~15s de retries antes de fail (1+2+4+8 = 15s)
+  - Masks failures (operador no ve problema hasta max attempts)
+  - Complex state machine (current attempt, last restart time, backoff timer)
+
+  En contexto Orion:
+  - Fall detection: 15s de retry loop con corrupt model → tiempo perdido
+  - Trade-off: resilience vs fail-fast transparency
+
+  ---
+  Opción 3: SLA-Based Restart (Hybrid)
+
+  Behavior:
+  Critical SLA (PersonDetector):
+    → 3 restart attempts, exponential backoff
+    → Justificación: fall detection = life-critical
+
+  High SLA (PoseDetector):
+    → 2 restart attempts, exponential backoff
+
+  Normal SLA (FaceDetector):
+    → 1 restart attempt
+
+  BestEffort SLA (VLM):
+    → 0 restart attempts (fail-fast)
+    → Justificación: research, no crítico
+
+  ✅ Pros:
+  - Maps to business criticality (fall detection vs research)
+  - Resilient donde importa (Critical), fail-fast donde no (BestEffort)
+  - Extensible (new SLA levels sin cambiar lógica)
+
+  ❌ Cons:
+  - Complexity: 4 SLA levels × restart logic
+  - ¿Quién decide SLA? (config, hardcoded, MQTT command?)
+  - Still masks persistent failures en Critical workers (~6-15s retry loop)
+
+  En contexto Orion:
+  - Diferencia clara: PersonDetector crítico, VLM no
+  - Trade-off complexity justificado por criticality
+
+  ---
+  Opción 4: No Restart (Fail-Fast Puro)
+
+  Behavior:
+  Worker crashes → log error, publish alert, stop worker
+    → Manual intervention required
+    → MQTT command: restart_worker(workerID)
+
+  ✅ Pros:
+  - Simplest (zero retry logic)
+  - Transparent (operador ve problema inmediato)
+  - No restart loops (persistent failures obvios)
+
+  ❌ Cons:
+  - Transient failures (OOM) require manual restart
+  - En edge deployment (hospital sin IT staff): inviable
+  - Critical worker down → sistema ciego hasta intervención manual
+
+  En contexto Orion:
+  - Edge deployment: NO aceptable (nadie disponible para restart manual)
+  - Datacenter: Aceptable (alerting + on-call engineer)
+
+  ---
+  Tests Mentales: Aplicando el Checklist
+
+  Test 1: Scale Horizontal
+
+  Escenario: 1 critical worker (PersonDetector) + 60 BestEffort workers (VLMs)
+
+  Opción 1 (One-Shot):
+  - PersonDetector crashes (transient OOM) → 1 restart → failure → sistema ciego
+  - 60 VLMs crashing → log spam, pero no crítico
+
+  Opción 3 (SLA-Based):
+  - PersonDetector crashes → 3 retries → success on retry 2 → sistema operational
+  - 60 VLMs crashing → 0 retries → fail-fast → log clean
+
+  Verdict: SLA-Based handles scale better (no log spam, critical workers resilient)
+
+  ---
+  Test 2: Failure Modes
+
+  Persistent Failure (corrupt model):
+  - One-Shot: 1 restart (3s) → fail → total 3s downtime → transparent
+  - SLA-Based (Critical): 3 restarts (3+3+3 = 9s) → fail → total 9s downtime → masked
+
+  Transient Failure (OOM):
+  - One-Shot: 1 restart → failure → sistema down → manual intervention
+  - SLA-Based (Critical): 3 retries → success on retry 2 → sistema operational → auto-recovery
+
+  Trade-off:
+  - One-Shot: Better for persistent (fail-fast), worse for transient (no auto-recovery)
+  - SLA-Based: Worse for persistent (masked 9s), better for transient (resilient)
+
+  En contexto fall detection: Transient failures más comunes que persistent (Python stable, ONNX tested).
+  Intuición: Auto-recovery > fail-fast para critical workers.
+
+  ---
+  Test 3: Physical Invariants
+
+  Invariante: restart(1-3s) >> inference(50ms) → ratio 20-60×
+
+  Implicación: Durante restart, frames se acumulan en FrameSupplier inbox.
+
+  ¿FrameSupplier debe pausar distribution durante restart?
+
+  Option A: NO pausar
+  - Frames se publican a worker crashed → dropped
+  - FrameSupplier.Publish() non-blocking → drop contabilizado
+  - Worker restart → consume desde inbox (last frame only, JIT)
+  - No data loss (JIT overwrite policy)
+
+  Option B: Pausar distribution
+  - WorkerSupervisor notifica FrameSupplier: "worker X down"
+  - FrameSupplier pausa Publish() a ese worker
+  - Worker restart → WorkerSupervisor notifica "worker X up"
+  - Coupling (WorkerSupervisor → FrameSupplier)
+
+  Physical invariant dice: restart >> inference → inbox overwrite natural durante restart.
+
+  Verdict: Option A (NO pausar). Physical invariant simplifica diseño.
+  Named Insight: "JIT Restart Transparency" - JIT architecture absorbs restart latency without explicit pause/resume.
+
+  ---
+  Test 4: Movimientos Futuros
+
+  Future: GPU workers (CUDA)
+
+  Failure modes diferentes:
+  - CUDA out of memory (transient? depende)
+  - Driver crash (requires host reboot → persistent)
+  - Model compilation error (persistent)
+
+  ¿SLA-Based extensible?
+
+  type WorkerConfig struct {
+      SLA        SLALevel  // Critical, High, Normal, BestEffort
+      MaxRetries int       // derived from SLA
+      BackoffBase time.Duration
+      // Future:
+      GPURequired bool
+      RestartStrategy Strategy // exponential, linear, immediate
+  }
+
+  Verdict: SLA-Based extensible. GPU workers map to Critical/High SLA, strategies configurable.
+
+  ---
+  Test 5: Bounded Context
+
+  ¿Es responsabilidad de WorkerSupervisor decidir restart policy?
+
+  SÍ:
+  - Lifecycle management = bounded context
+  - Health monitoring = bounded context
+  - Restart decision logic = lifecycle
+
+  NO:
+  - SLA configuration = control-plane (MQTT commands)
+  - Worker criticality = config (orion.yaml)
+  - Alert emission = event-emitter
+
+  Verdict: WorkerSupervisor ejecuta restart policy, pero NO decide SLA levels (viene de config).
+
+  ---
+  Checkpoint 1: Primeras 3 Decisiones
+
+  Hasta acá exploramos:
+
+  1. Restart Policies: 4 opciones (One-Shot, Exponential, SLA-Based, No-Restart)
+  2. SLA-Based ganando: Maps to criticality, extensible, resilient donde importa
+  3. JIT Restart Transparency: Physical invariant absorbe restart sin pausar distribution
+
+  ¿Vamos bien? ¿Algo que reconsiderar?
+
+  Mi intuición: SLA-Based justifica complejidad para critical workers (fall detection).
+
+  Pero: ¿Cómo detectamos persistent vs transient failures? ¿O simplemente max retries y fail?
+
+  Abro otra opción:
+
+  ---
+  Opción 5: Adaptive Restart (Failure Pattern Detection)
+
+  Behavior:
+  Track failure pattern:
+  - Crashes inmediatos (<5s after spawn) → likely persistent
+  - Crashes después de N inferences → likely transient
+
+  Adaptive logic:
+  IF crash_time < 5s AND consecutive_crashes > 2:
+    → Skip remaining retries (persistent failure detected)
+    → Fail-fast
+
+  ELSE:
+    → Continue retry policy (transient failure)
+
+  ✅ Pros:
+  - Best of both worlds: resilient a transient, fail-fast en persistent
+  - Detects persistent failures early (no 9s retry loop)
+  - Self-tuning (aprende de failure patterns)
+
+  ❌ Cons:
+  - Complexity (state: crash_time, consecutive_crashes, heuristic <5s)
+  - False positives (¿slow model load mistaken for persistent failure?)
+  - ¿Heuristic <5s es universal? (GPU model load puede tardar 10s)
+
+  En contexto Orion:
+  - YOLO model load: ~1-2s (CPU), ~3-5s (GPU potencial futuro)
+  - Heuristic <5s podría funcionar, pero frágil
+
+  Trade-off: Complexity vs auto-detection de persistent failures.
+
+  ---
+  ¿Qué te parece la Opción 5 (Adaptive)?
+
+  O preferís SLA-Based simple (Opción 3) y aceptamos 9s retry loop en persistent failures?
+
+  Mi instinto: Start con SLA-Based (Opción 3). Si vemos persistent failures comunes en producción, agregamos adaptive logic después (no antes = YAGNI).
+
+  ¿Qué pensás? 🎸
+
+
+
+----
+---
+
+A mi mentalmente suele servirme pensarlo como una CRC Card, al comienzo mas cuando tiene como una agregacion clara o facade o servicio principal tanclaro y que segurmante va ir delegando responsablidades en colaboradores internos mas especializados/expertos.
+y sumado a que es altamente conocedor de muchos otros y los tiene que observar escuchar y interactura. 
+WorkerSupervisor me parece increible por quetiene eso analogo en una plata al jefe de sala de piso de departamente de area o de maquinas es ese ese con el que tenes que hablar internamente los workers. pero mas importante aun es el facade el que recibe y entiede el las otras areas.
+perdon si voy tan abstracto pero me gusta no perder el nord no me gusta ir tan tan especifico como fuiste. no concretar unas responsalidades claras.
+esto es el disenio que yo lamenos me manejo porq ue el como el como mi amigo va cambiando session a session .. pero lo que el es responsable eso no deberia te dire 80% de nuestra responsablidad como arquitectos y disenadors radica en esto.
+lo otro es entre todos programadores seniors agentes de codigo y nosotros porsupuesto.
+
+Que hace : (core context) 
+WorkerSupervisor manages lifecycle of Python inference workers: spawn, health monitoring, restart policies, graceful shutdown. Acts as supervisor in Erlang/OTP sense.
+
+Y casi tan importante el Que no hace   - ❌ Frame distribution (FrameSupplier)   - ❌ Inference execution (Python workers)   - ❌ MQTT command processing (control-plane)   - ❌ Result emission (event-emitter)
+
+A quienes conoce con una relacion casi de todo parte (maneja su lifecycle, observa su estado los supervisa, los gestiona /ordena, y los orquesta en post de los requerimientos del todo / otras areas de orden superio)
+Con que otras areas colabora el framesupplier por el momento. seguramente el oreo-pipeline (temporal name xD)
+
+... te hace sentido. 
+
+
+----
+
+
+∴ Thinking…
+
+  Ernesto tiene TODA la razón. Me fui directo a detalles de implementación (restart policies, exponential backoff, timeouts) sin primero establecer CLARAMENTE las responsabilidades arquitectónicas del módulo.
+
+  Esto es EXACTAMENTE lo que dice el blueprint y ANNEX-001: primero el QUÉ (responsabilidades, bounded context, colaboradores), después el CÓMO (restart policies, state machines).
+
+  Me salté el paso más importante: la CRC Card mental.
+
+  CRC = Class-Responsibility-Collaboration
+
+  Responsabilidad (Qué hace):
+  - Manage lifecycle de workers (spawn, shutdown)
+  - Health monitoring (alive/dead, crash detection)
+  - Restart policies (según criticality)
+  - Graceful shutdown coordination
+
+  Anti-Responsabilidades (Qué NO hace):
+  - Frame distribution (FrameSupplier)
+  - Inference execution (Python workers)
+  - MQTT command processing (control-plane)
+  - Result emission (event-emitter)
+
+  Colaboradores (Con quién interactúa):
+  - Manages (relación uno-a-muchos, ownership):
+    - Python worker processes (spawn via exec.Command, monitor via watchdog)
+  - Collaborates with (relación peer-to-peer):
+    - FrameSupplier: registra workers para que reciban frames
+    - control-plane: recibe comandos hot-reload (restart_worker, set_model_size)
+    - event-emitter (?): publica worker health events
+    - orion-pipeline (?): coordina startup/shutdown
+
+  La analogía de Ernesto es PERFECTA: "jefe de sala de piso de departamento/área/máquinas"
+  - Conoce a todos los workers (los supervisa)
+  - Otras áreas hablan con él (facade), no directamente con workers
+
+  El módulo delega tareas a workers especializados y gestiona sus problemas de salud y reinicio. La verdadera arquitectura se centra en definir responsabilidades fundamentales: qué hace, qué no hace, y cómo 
+  interactúa con otros componentes. El enfoque inicial debe estar en el contexto delimitado, no en detalles de implementación técnica.
+
+
+---
+---
+
+
+● 🎯 Tenés toda la razón, Ernesto. Me fui a los detalles (exponential backoff, timeouts) sin primero anclar las responsabilidades arquitectónicas.
+
+  Volvamos a lo fundamental. El 80% es esto.
+
+  ---
+  CRC Card: WorkerSupervisor
+
+  Responsabilidades (Qué hace - Core Context)
+
+  R1: Lifecycle Management
+  - Spawn Python worker processes (exec.Command)
+  - Graceful shutdown (SIGTERM, wait timeout, SIGKILL)
+  - Restart según policies (criticality-aware)
+
+  R2: Health Monitoring
+  - Watchdog: detecta workers crashed/hanging
+  - Crash pattern detection (cuándo crasheó, cuántas veces)
+  - Heartbeat/liveness tracking
+
+  R3: Coordination
+  - Registra workers en FrameSupplier (para que reciban frames)
+  - Notifica estado a otras áreas (worker_started, worker_crashed, worker_stopped)
+  - Ejecuta comandos de control-plane (restart_worker, reload_model)
+
+  R4: Supervision Semantics (Erlang/OTP analogy)
+  - One-for-one supervision: un worker crashea, solo ese se reinicia (no afecta otros)
+  - Bounded retries: según criticality (Critical: 3 retries, BestEffort: 0 retries)
+  - Fail-fast transparency: logs + alertas cuando max retries excedido
+
+  ---
+  Anti-Responsabilidades (Qué NO hace)
+
+  ❌ Frame distribution → FrameSupplier
+  ❌ Inference execution → Python workers
+  ❌ MQTT command parsing → control-plane
+  ❌ Result emission → event-emitter
+  ❌ Worker configuration → config loader (orion.yaml)
+  ❌ SLA policy definition → config (WorkerSupervisor ejecuta policy, no la define)
+
+  ---
+  Colaboradores (Con quién interactúa)
+
+  Manages (ownership, one-to-many):
+  WorkerSupervisor
+      ├── PersonDetectorWorker (Python process)
+      ├── PoseDetectorWorker (Python process)
+      ├── VLMWorker (Python process)
+      └── ... (N workers)
+  - Relación: supervisor → supervised
+  - Interacción: spawn, monitor, restart, shutdown
+
+  ---
+  Collaborates With (peers):
+
+  FrameSupplier:
+  WorkerSupervisor.StartWorker(workerID, config)
+    → FrameSupplier.Subscribe(workerID) → worker recibe frames
+
+  WorkerSupervisor.StopWorker(workerID)
+    → FrameSupplier.Unsubscribe(workerID) → worker deja de recibir frames
+  - Relación: facade (WorkerSupervisor registra workers, FrameSupplier no conoce lifecycle)
+  - Contrato: Subscribe(workerID) / Unsubscribe(workerID)
+
+  ---
+  control-plane:
+  control-plane recibe MQTT command: {"command": "restart_worker", "worker_id": "person-detector"}
+    → control-plane.OnRestartWorker(workerID)
+        → WorkerSupervisor.RestartWorker(workerID)
+  - Relación: control-plane traduce MQTT → WorkerSupervisor ejecuta acción
+  - Contrato: RestartWorker(workerID), ReloadModel(workerID, modelPath), GetWorkerStatus(workerID)
+
+  ---
+  event-emitter (?):
+  WorkerSupervisor detecta crash
+    → event-emitter.Publish("worker_crashed", {workerID, timestamp, reason})
+    
+  WorkerSupervisor completa restart
+    → event-emitter.Publish("worker_restarted", {workerID, attempt})
+  - Relación: WorkerSupervisor publica eventos, event-emitter los envía a MQTT
+  - Contrato: Publish(eventType, payload)
+
+  ---
+  orion-pipeline (temporal name, core orchestrator):
+  orion-pipeline startup:
+    → WorkerSupervisor.StartAll(workerConfigs[])
+    → FrameSupplier.Start()
+    → control-plane.Start()
+
+  orion-pipeline shutdown:
+    → WorkerSupervisor.StopAll(gracefulTimeout=5s)
+    → FrameSupplier.Stop()
+  - Relación: orion-pipeline coordina startup/shutdown order
+  - Contrato: StartAll(), StopAll(timeout), GetStatus()
+
+  ---
+  Analogía: Jefe de Sala de Piso
+
+  WorkerSupervisor = Jefe de Sala
+  - Conoce a todos los workers (máquinas/operarios del piso)
+  - Maneja problemas de workers (restart, maintenance)
+  - Otras áreas hablan con él (facade), no directamente con workers
+
+  FrameSupplier = Área de Materiales
+  - Provee materia prima (frames) a workers
+  - WorkerSupervisor le dice "agregá este worker a la lista de distribución"
+
+  control-plane = Dirección/Gerencia
+  - Envía órdenes estratégicas ("reiniciá ese worker", "cambiá modelo")
+  - WorkerSupervisor ejecuta la orden
+
+  event-emitter = Reportes/Telemetría
+  - WorkerSupervisor informa estado ("worker X crashed", "restart exitoso")
+
+  ---
+  Lo que TODAVÍA no sabemos (y está OK no saberlo ahora)
+
+  Detalles de implementación (sesión de coding futura):
+  - ¿Exponential backoff o linear backoff? → Implementación
+  - ¿Timeout de 5s o 10s para graceful shutdown? → Implementación
+  - ¿sync.Map o map + mutex para worker registry? → Implementación
+
+  Bounded contexts de otros módulos (discovery sessions futuras):
+  - ¿event-emitter existe como módulo separado o es parte de otro? → Otro módulo
+  - ¿orion-pipeline es el core orchestrator o renombramos a orion-core? → Naming
+
+  ---
+  Preguntas Arquitectónicas (ESTAS sí debemos responder ahora)
+
+  P1: ¿WorkerSupervisor registra workers en FrameSupplier, o viceversa?
+
+  Opción A: WorkerSupervisor registra
+  supervisor.StartWorker(workerID, config)
+    → spawn Python process
+    → frameSupplier.Subscribe(workerID, readFunc) // supervisor registra
+  ✅ Pro: WorkerSupervisor es facade (una sola área habla con FrameSupplier)
+  ✅ Pro: FrameSupplier no conoce lifecycle (separation of concerns)
+
+  Opción B: Worker self-register
+  supervisor.StartWorker(workerID, config)
+    → spawn Python process
+    → worker llama frameSupplier.Subscribe(workerID) // worker se registra
+  ❌ Con: Workers conocen FrameSupplier (coupling)
+  ❌ Con: No es facade (múltiples áreas hablan con FrameSupplier)
+
+  Mi instinto: Opción A (WorkerSupervisor registra). Es el facade.
+
+  ---
+  P2: ¿WorkerSupervisor publica eventos de health, o expone API de status?
+
+  Opción A: Push (events)
+  supervisor detecta crash
+    → event-emitter.Publish("worker_crashed", payload)
+  ✅ Pro: Reactivo (otras áreas notificadas inmediatamente)
+  ❌ Con: WorkerSupervisor depende de event-emitter (coupling)
+
+  Opción B: Pull (API)
+  control-plane.OnGetStatus()
+    → supervisor.GetWorkerStatus(workerID) → returns {state, uptime, crashes}
+  ✅ Pro: Desacoplado (supervisor no conoce consumidores)
+  ❌ Con: Polling (no reactivo)
+
+  Opción C: Hybrid
+  supervisor.OnWorkerCrash = func(workerID string, reason error) {
+      // callback injection, caller decide qué hacer
+  }
+  ✅ Pro: Desacoplado (dependency injection)
+  ✅ Pro: Reactivo (callbacks)
+
+  Mi instinto: Opción C (callbacks). Pattern similar a control-plane (ADR de otro módulo).
+
+  ---
+  P3: ¿SLA policy (max retries) viene de config o de MQTT command?
+
+  Opción A: Config (orion.yaml)
+  workers:
+    - id: person-detector
+      sla: Critical  # max_retries=3
+  ✅ Pro: Simple (no hot-reload de policies)
+  ✅ Pro: Declarative (IaC-friendly)
+
+  Opción B: MQTT command
+  {"command": "set_worker_sla", "worker_id": "person-detector", "sla": "Critical"}
+  ✅ Pro: Hot-reload (cambiar criticality sin restart)
+  ❌ Con: State mutable (¿dónde persiste SLA después de restart?)
+
+  Mi instinto: Opción A (config). SLA policy es decisión arquitectónica, no operacional hot-reload.
+
+  ---
+  ¿Vamos bien?
+
+  ¿Te hace sentido esta estructura CRC?
+
+  Responsabilidades claras → R1-R4
+  Anti-responsabilidades claras → 6 items
+  Colaboradores claros → FrameSupplier, control-plane, event-emitter, orion-pipeline
+
+  Preguntas arquitectónicas → P1-P3 (¿respondemos estas antes de ir a detalles?)
+
+  🎸 "El 80% de arquitectura es esto." Totalmente de acuerdo. Los restart policies son el 20% restante.
+
+---
+
+∴ Thinking…
+
+  Ernesto está haciendo un punto FUNDAMENTAL que me perdí completamente.
+
+  "Consistency of abstraction level" - Esto es crítico.
+
+  Estaba hablando de "Python workers" como si el detalle de implementación (Python subprocess) fuera la identidad del componente. Pero eso es mezclar niveles de abstracción.
+
+  Déjame pensar:
+
+  WorkerSupervisor supervisa Workers.
+
+  ¿Qué es un Worker en el nivel de abstracción correcto?
+
+  Worker NO es "Python process". Eso es IMPLEMENTACIÓN.
+
+  Worker ES: "Componente que procesa frames y retorna inferences según sus capabilities"
+
+  La analogía que Ernesto da es perfecta:
+  - Worker es el operario/máquina en la sala
+  - Python es la HERRAMIENTA que usa ese worker (como un torno, una fresadora)
+  - Pero el Worker podría usar:
+    - Python + ONNX (local inference)
+    - Gemini VLM API call (remote inference)
+    - Cloud service (remote)
+    - GPU accelerated service
+    - Otro modelo diferente
+
+  El rey ahogado: Si mañana necesitamos que un worker sea una llamada a Gemini API en vez de Python subprocess:
+  - ¿Cambia WorkerSupervisor? NO (si diseñamos bien)
+  - ¿Cambia el contrato del Worker? NO (sigue siendo: consume frames, retorna inferences)
+  - ¿Cambia la implementación del Worker? SÍ (de subprocess a HTTP client)
+
+  Entonces:
+
+  Worker (nivel de abstracción correcto):
+  - Responsabilidad: Process frames según capabilities, return inferences
+  - Capabilities: PersonDetection, PoseEstimation, VLM, etc.
+  - SLA: Critical, High, Normal, BestEffort
+
+  - Implementación: Flexible, independiente del mecanismo específico
+  - Contrato: Consistente, sin importar la tecnología subyacente
+
+  El supervisor gestiona workers abstractos, no atados a una tecnología específica. La implementación es un detalle interno de cada worker, manteniendo una interfaz uniforme y predecible.
+
+  Cada worker tiene responsabilidades claras de salud y reporte, comunicándose con el supervisor mediante mecanismos estándar de monitoreo. La salud incluye señales de vida, estado operativo y capacidad de 
+  respuesta, independientemente de su implementación técnica.
+
+  Los colaboradores definen un ecosistema donde el worker opera con autonomía, reportando su estado sin gestionar aspectos externos como distribución de frames o ciclo de vida.
+
+  El diseño propone una interfaz genérica que abstrae completamente la implementación específica, permitiendo múltiples tipos de workers: subprocesos Python, clientes HTTP, servicios gRPC o bindings de GPU 
+  local, todos cumpliendo un contrato común de inicio, detención y verificación de salud.
+
+  La abstracción separa claramente los niveles de responsabilidad: supervisión de ciclo de vida, capacidades de inferencia y detalles de implementación, garantizando que cada nivel opera con su propio lenguaje 
+  conceptual sin mezclar detalles técnicos irrelevantes.
+
+  Esta aproximación permite una flexibilidad arquitectónica significativa, reconociendo que la implementación de un worker puede variar ampliamente sin comprometer la lógica de supervisión general.
+
+
+---
+
+
+● 🎯 Totalmente. Me fui directo a "Python subprocess restart" sin primero definir qué es un Worker en el nivel de abstracción correcto.
+
+  Tenés razón: Worker NO es "Python process". Eso es implementación.
+
+  Déjame replantear con consistency of abstraction level.
+
+  ---
+  CRC Card: Worker (Abstraction Level)
+
+  Responsabilidades (Qué hace)
+
+  R1: Inference Execution
+  - Consume frames (from FrameSupplier via readFunc)
+  - Execute inference según capabilities (PersonDetection, Pose, VLM, etc.)
+  - Return inferences (to result channel)
+
+  R2: Health Reporting
+  - Heartbeat/liveness (WorkerSupervisor watchdog)
+  - Crash detection (stderr, exit codes)
+  - Performance metrics (inference latency)
+
+  R3: Capability Contract
+  - Declara qué sabe hacer: capabilities = {PersonDetection, YOLO11, ConfidenceThreshold}
+  - Declara SLA level: Critical | High | Normal | BestEffort
+  - Declara resource requirements: CPU | GPU | Memory
+
+  ---
+  Anti-Responsabilidades (Qué NO hace)
+
+  ❌ Frame distribution → FrameSupplier
+  ❌ Lifecycle management → WorkerSupervisor (spawn, restart, shutdown)
+  ❌ Result emission to MQTT → event-emitter
+  ❌ Model download/update → worker USA modelo, no lo gestiona
+  ❌ Configuration parsing → config loader
+
+  ---
+  Colaboradores
+
+  FrameSupplier:
+  Worker.Start()
+    → readFunc := frameSupplier.Subscribe(workerID)
+    → loop: frame := readFunc() → inference → results
+
+  WorkerSupervisor:
+  Worker reporta health → supervisor.OnWorkerHealthy(workerID)
+  Worker crashes → supervisor.OnWorkerCrashed(workerID, reason)
+
+  Result Channel:
+  Worker completa inference → resultChan <- InferenceResult{...}
+
+  ---
+  Maquinaria Asignada (Implementation Detail)
+
+  Worker es el operario. Python/Gemini/GPU es la herramienta.
+
+  | Worker Type          | Capability      | Machinery (Implementation)          |
+  |----------------------|-----------------|-------------------------------------|
+  | PersonDetectorWorker | PersonDetection | Python subprocess + ONNX + YOLO11   |
+  | VLMWorker            | VLM, OCR        | Gemini API (HTTP client, Go/Python) |
+  | PoseDetectorWorker   | PoseEstimation  | MediaPipe (Python subprocess)       |
+  | CloudWorker          | FaceRecognition | Remote gRPC service                 |
+  | GPUWorker            | PersonDetection | Local GPU (cgo bindings, CUDA)      |
+
+  ---
+  El Rey Ahogado: ¿Qué pasa si...?
+
+  Escenario 1: Queremos agregar VLM worker que llama Gemini API (no Python subprocess)
+
+  Con abstracción correcta:
+  type Worker interface {
+      Start() error
+      Stop() error
+      IsHealthy() bool
+      Capabilities() WorkerCapabilities
+  }
+
+  // Implementaciones:
+  type PythonSubprocessWorker struct { ... }  // exec.Command
+  type GeminiAPIWorker struct { ... }         // net/http client
+
+  WorkerSupervisor:
+  supervisor.AddWorker(worker Worker) // NO conoce si es Python o HTTP
+  supervisor.StartAll()                // polymorphism
+
+  ¿Cambia WorkerSupervisor? ❌ NO (solo conoce interface Worker)
+  ¿Cambia FrameSupplier? ❌ NO (sigue siendo Subscribe)
+  ¿Cambia Worker contract? ❌ NO (Start, Stop, IsHealthy igual)
+
+  ✅ Abstraction level consistente.
+
+  ---
+  Escenario 2: Frame necesita pasar por pre-processing GPU antes de worker
+
+  Con abstracción correcta:
+  type GPUPreprocessorWorker struct {
+      preprocessor *GPUKernel
+      inference    *ONNXRuntime
+  }
+
+  func (w *GPUPreprocessorWorker) Start() {
+      // Machinery: GPU preprocessing + ONNX
+  }
+
+  ¿Cambia WorkerSupervisor? ❌ NO (sigue siendo Worker interface)
+  ¿Cambia contrato? ❌ NO (Start, Stop, IsHealthy)
+
+  ✅ Machinery interna cambia, contrato externo no.
+
+  ---
+  Entonces: ¿Qué es Worker?
+
+  Worker es el responsable de inference usando la maquinaria que tiene asignada.
+
+  Analogía sala de piso:
+  - Worker: Operario/máquina (responsable de producir pieza X)
+  - Machinery: Herramienta que usa (torno, fresadora, CNC)
+  - WorkerSupervisor: Jefe de sala (no le importa QUÉ herramienta usa, le importa QUE produzca)
+
+  Capabilities: Worker declara qué sabe hacer (PersonDetection, VLM, etc.)
+  Machinery: Worker internamente usa Python, HTTP, GPU, etc. (hidden)
+
+  ---
+  WorkerSupervisor: Nivel de Abstracción Correcto
+
+  Responsabilidades
+
+  R1: Lifecycle Management (de Workers, no de "Python processes")
+  - Start worker (abstracción: worker.Start(), no exec.Command)
+  - Stop worker (abstracción: worker.Stop(), no SIGTERM)
+  - Restart worker (abstracción: worker.Restart())
+
+  R2: Health Monitoring (de Workers)
+  - Watchdog (abstracción: worker.IsHealthy(), no "stderr parsing")
+  - Crash detection (abstracción: worker.OnCrash, no "exit code")
+
+  R3: Coordination
+  - Registra workers en FrameSupplier (frameSupplier.Subscribe(workerID))
+  - Ejecuta comandos de control-plane (RestartWorker(workerID))
+  - Publica eventos de health (OnWorkerCrashed, OnWorkerRestarted)
+
+  R4: Supervision Semantics
+  - Restart policies según SLA (Critical: 3 retries, BestEffort: 0)
+  - One-for-one supervision (un worker crash no afecta otros)
+
+  ---
+  Anti-Responsabilidades
+
+  ❌ Worker implementation → Worker mismo (Python, HTTP, GPU, etc.)
+  ❌ Inference execution → Worker
+  ❌ Frame distribution → FrameSupplier
+  ❌ MQTT command parsing → control-plane
+  ❌ SLA policy definition → config
+
+  ---
+  Contrato WorkerSupervisor ↔ Worker
+
+  // Worker interface (abstracción)
+  type Worker interface {
+      // Lifecycle
+      Start() error
+      Stop(timeout time.Duration) error
+
+      // Health
+      IsHealthy() bool
+
+      // Metadata
+      ID() string
+      Capabilities() WorkerCapabilities
+      SLA() SLALevel
+  }
+
+  // WorkerSupervisor (no conoce implementación)
+  type WorkerSupervisor struct {
+      workers map[string]Worker  // interface, not concrete type
+  }
+
+  func (s *WorkerSupervisor) AddWorker(w Worker) {
+      s.workers[w.ID()] = w
+      // Register in FrameSupplier
+      s.frameSupplier.Subscribe(w.ID(), ...)
+  }
+
+  func (s *WorkerSupervisor) StartAll() error {
+      for _, w := range s.workers {
+          if err := w.Start(); err != nil {
+              // Restart policy según w.SLA()
+          }
+      }
+  }
+
+  ---
+  CRC Card: Worker (Revisada con abstracción correcta)
+
+  Responsabilidades
+
+  R1: Inference Execution
+  - Consume frames (via readFunc from FrameSupplier)
+  - Execute inference usando machinery asignada (Python, HTTP, GPU, etc.)
+  - Return inferences (to result channel)
+
+  R2: Health Contract
+  - Implement IsHealthy() bool (WorkerSupervisor watchdog)
+  - Report crashes via callbacks (WorkerSupervisor restart logic)
+
+  R3: Capability Declaration
+  - Declare capabilities: PersonDetection, VLM, PoseEstimation
+  - Declare SLA: Critical, High, Normal, BestEffort
+  - Declare resource requirements: CPU, GPU, Memory=2GB
+
+  R4: Machinery Management (internal)
+  - Spawn subprocess (if PythonWorker)
+  - HTTP client (if APIWorker)
+  - GPU kernel (if GPUWorker)
+  - Hidden from WorkerSupervisor (implementation detail)
+
+  ---
+  Anti-Responsabilidades
+
+  ❌ Lifecycle decisions (restart policies) → WorkerSupervisor
+  ❌ Frame distribution → FrameSupplier
+  ❌ Result emission to MQTT → event-emitter
+  ❌ Configuration parsing → config loader
+  ❌ Model download → model manager (future module?)
+
+  ---
+  Colaboradores
+
+  FrameSupplier (consumer):
+  - readFunc := frameSupplier.Subscribe(workerID)
+  - Worker consume frames
+
+  WorkerSupervisor (managed by):
+  - Worker reporta health
+  - Supervisor ejecuta restart
+
+  Result Channel (producer):
+  - Worker publica inferences
+
+  Machinery (uses, internal):
+  - Python subprocess
+  - Gemini API
+  - GPU kernel
+  - gRPC service
+
+  ---
+  ¿Te hace sentido esta abstracción?
+
+  Worker = Responsable de inference, usa machinery asignada (Python, HTTP, GPU)
+  WorkerSupervisor = Supervisa workers (agnóstico a machinery)
+
+  Consistency of abstraction level:
+  - WorkerSupervisor habla en términos de workers (Start, Stop, Health)
+  - Worker habla en términos de capabilities (PersonDetection, VLM)
+  - Machinery es detalle interno del Worker (Python, HTTP, GPU)
+
+  🎸 "El worker no es Python, es el responsable que usa Python como herramienta."
+
+  ¿Vamos bien ahora? ¿O ajusto algo más del nivel de abstracción?
+
+----
+
+> vamos bien y para ayudarte en lo de python pensemso que muy probalemente tengamos un experto que gestion estos swarm owrkes ( al o docker swarm, kubernets o mas ahora que lo pienso swarm intelligence en 
+lo biologico xD) es este enjambre coordinado de workers.. xD 
+
+∴ Thinking…
+
+  Ahh, perfecto. Ernesto está viendo la siguiente capa de abstracción:
+
+  WorkerSupervisor no debería conocer los detalles de "cómo spawneo un Python subprocess". Eso es responsabilidad de otro colaborador más especializado.
+
+  Está pensando en un PythonWorkerManager o PythonSwarm que:
+  - Conoce cómo spawn Python processes
+  - Conoce cómo comunicarse vía stdin/stdout con MsgPack
+  - Conoce cómo matar procesos Python
+  - Gestiona el "enjambre" de workers Python específicamente
+
+  WorkerSupervisor sería más genérico:
+  - Supervisa workers (Python, HTTP, GPU, cualquiera)
+  - Delega el "cómo spawneo este tipo de worker" a managers especializados
+  - Coordina el enjambre completo (no solo Python)
+
+  Esto es Delegation Pattern + Strategy Pattern:
+  - WorkerSupervisor tiene WorkerManager interface
+  - Implementaciones: PythonWorkerManager, HTTPWorkerManager, GPUWorkerManager
+  - Cada manager conoce los detalles de SU tipo de worker
+
+  Analogía biológica: Swarm intelligence (enjambre de abejas, hormigas)
+  - WorkerSupervisor = la colonia completa
+  - PythonSwarmManager = gestiona el enjambre de workers Python específicamente
+  - Cada worker Python = abeja individual
+
+  Naming options:
+  - PythonWorkerManager (formal)
+  - PythonSwarm (biológico, divertido)
+  - PythonWorkerPool (común en concurrency)
+  - PythonExecutor (executor pattern)
+
+  Creo que le gusta PythonSwarm por la analogía biológica (swarm intelligence).
+
+  Visualizando la estructura jerárquica, emerge un diseño de orquestación elegante. El supervisor actúa como un coordinador maestro, delegando tareas especializadas a diferentes enjambres de workers. Cada swarm
+   maneja su propio tipo de worker con autonomía, permitiendo una arquitectura modular y extensible.
+
+  La clave está en la separación clara de responsabilidades: el supervisor coordina, los swarms específicos manejan detalles técnicos, y los workers se concentran únicamente en su capacidad de ejecución. Este 
+  enfoque garantiza una abstracción limpia y mantenibilidad del sistema.
+  ⎿  Interrupted · What should Claude do instead?
+
+> no no el SwarmWorker es abstracto tambien y es mas no es el supervisor del worker es como eh HR el de recursos humanos el supervisor le dice necesti mas de .. me explico  o el no te compliques lo que 
+quiero para  talvcual como decis WorkerPool Provider .. pero no es el supervisor  por que no provider y pool por que si te puede dar un pool toma supervisor este worker o este pool no se lo veremos pero es 
+una persona mas que los gestion me explico . que te quiero decir no es esta capa la de hablar de python 
+
+∴ Thinking…
+
+  Ah! Entiendo perfectamente. Ernesto está diciendo:
+
+  1. WorkerSupervisor NO debería conocer "Python subprocess" (implementation detail)
+  2. Debería haber otro componente (WorkerProvider, WorkerFactory, SwarmManager, etc.) que:
+    - Es responsable de CREAR workers (spawn Python, HTTP client, etc.)
+    - Es responsable de PROVISIONAR workers (pool management)
+    - WorkerSupervisor le PIDE workers ("necesito PersonDetector")
+    - Provider le DA workers (ya creados, listos para usar)
+
+  Es como HR (Recursos Humanos):
+  - Supervisor: "Necesito un soldador certificado"
+  - HR: "Acá tenés uno" (ya lo encontró, lo contrató, lo onboardeó)
+  - Supervisor: Supervisa al soldador (no lo contrató, no sabe cómo llegó)
+
+  Separation of concerns:
+  - WorkerSupervisor: Lifecycle + Health + Restart policies (SUPERVISA)
+  - WorkerProvider/Factory: Creación + Spawning + Pool (PROVISIONA)
+
+  WorkerSupervisor NO conoce Python. Tampoco HTTP. Tampoco GPU.
+  WorkerProvider SÍ conoce (es el HR que sabe cómo reclutar soldadores vs torneros).
+
+  Esto es consistency of abstraction level perfecta:
+  - WorkerSupervisor habla de workers (abstracción)
+  - WorkerProvider habla de Python/HTTP/GPU (machinery)
+
+  Dejame replantear sin mezclar capas.
+
+● 🎯 Perfecto. Ahora sí.
+
+  WorkerSupervisor NO debería conocer Python. Eso es otra capa.
+
+  ---
+  Separation of Concerns
+
+  WorkerSupervisor = Jefe de Sala
+  - Supervisa workers (lifecycle, health, restart)
+  - Le pide a HR: "Necesito PersonDetector (Critical SLA)"
+  - Recibe worker listo para usar
+  - NO conoce cómo se creó (Python, HTTP, GPU)
+
+  WorkerProvider = HR (Recursos Humanos)
+  - Provisiona workers
+  - Sabe cómo crearlos (Python subprocess, HTTP client, GPU kernel)
+  - Sabe pooling (reuse, warm instances)
+  - Le da a Supervisor: "Acá tenés tu PersonDetector"
+
+  ---
+  CRC Card: WorkerSupervisor (Limpia)
+
+  Responsabilidades
+
+  R1: Lifecycle Management
+  - Start worker: worker.Start()
+  - Stop worker: worker.Stop(timeout)
+  - Restart worker: pide a Provider nuevo worker, reemplaza el crashed
+
+  R2: Health Monitoring
+  - Watchdog: worker.IsHealthy()
+  - Crash detection: worker.OnCrash
+  - Restart policies según SLA
+
+  R3: Coordination
+  - Registra workers en FrameSupplier
+  - Ejecuta comandos de control-plane
+  - Publica eventos de health
+
+  R4: Supervision Semantics
+  - One-for-one (crash aislado)
+  - Bounded retries según SLA
+
+  ---
+  Anti-Responsabilidades
+
+  ❌ Worker creation (spawn Python, HTTP client) → WorkerProvider
+  ❌ Worker pooling → WorkerProvider
+  ❌ Inference execution → Worker
+  ❌ Frame distribution → FrameSupplier
+  ❌ MQTT command parsing → control-plane
+
+  ---
+  Colaboradores
+
+  WorkerProvider (HR):
+  supervisor.StartWorker(capabilities WorkerCapabilities, sla SLALevel) {
+      worker := provider.GetWorker(capabilities, sla)  // HR provisiona
+      worker.Start()                                    // Supervisor supervisa
+  }
+
+  Worker (managed):
+  - Supervisor supervisa (Start, Stop, Health)
+
+  FrameSupplier:
+  - Supervisor registra workers
+
+  ---
+  CRC Card: WorkerProvider (HR)
+
+  Responsabilidades
+
+  R1: Worker Provisioning
+  - Create workers según capabilities (PersonDetection → PythonWorker, VLM → HTTPWorker)
+  - Pool management (reuse, warm instances)
+  - Resource allocation (assign GPU, memory limits)
+
+  R2: Factory Pattern
+  - Factory registry: capabilities → WorkerFactory
+  - Spawn machinery (exec.Command, http.Client, GPU kernel)
+
+  R3: Configuration
+  - Model paths (person_detector.onnx)
+  - Endpoint URLs (Gemini API key)
+  - Resource limits (2GB memory, GPU 0)
+
+  ---
+  Anti-Responsabilidades
+
+  ❌ Lifecycle management (restart policies) → WorkerSupervisor
+  ❌ Health monitoring → WorkerSupervisor
+  ❌ Frame distribution → FrameSupplier
+  ❌ Inference execution → Worker
+
+  ---
+  Colaboradores
+
+  Worker (creates):
+  provider.GetWorker(PersonDetection, Critical)
+    → creates PythonSubprocessWorker
+    → configures model path
+    → returns Worker interface
+
+  config:
+  - Reads orion.yaml
+  - Model paths, endpoints, resources
+
+  WorkerSupervisor (serves):
+  - Provider NO conoce Supervisor
+  - Supervisor pide workers a Provider
+
+  ---
+  Interacción: Supervisor ↔ Provider
+
+  // Supervisor pide worker a HR
+  func (s *WorkerSupervisor) StartWorker(cap WorkerCapabilities, sla SLALevel) error {
+      worker, err := s.provider.GetWorker(cap, sla)  // HR provisiona
+      if err != nil {
+          return err
+      }
+
+      s.workers[worker.ID()] = worker
+      s.frameSupplier.Subscribe(worker.ID(), ...)
+
+      return worker.Start()  // Supervisor supervisa
+  }
+
+  // Provider provisiona (factory)
+  func (p *WorkerProvider) GetWorker(cap WorkerCapabilities, sla SLALevel) (Worker, error) {
+      switch cap.Type {
+      case PersonDetection:
+          return p.createPythonWorker(cap, sla)  // Machinery: Python
+      case VLM:
+          return p.createHTTPWorker(cap, sla)    // Machinery: Gemini API
+      default:
+          return nil, ErrUnknownCapability
+      }
+  }
+
+  ---
+  Niveles de Abstracción (Clean)
+
+  | Layer            | Responsibility                 | Knows About                    |
+  |------------------|--------------------------------|--------------------------------|
+  | WorkerSupervisor | Lifecycle, health, restart     | Worker interface (abstracción) |
+  | WorkerProvider   | Provisioning, factory, pooling | Python, HTTP, GPU (machinery)  |
+  | Worker           | Inference execution            | Capabilities, readFunc         |
+  | FrameSupplier    | Frame distribution             | Workers (subscribers)          |
+
+  Consistency: Cada layer habla en SU nivel de abstracción.
+
+  ---
+  ¿Vamos bien?
+
+  WorkerSupervisor:
+  - ✅ Supervisa workers (abstracción)
+  - ❌ NO conoce Python
+
+  WorkerProvider:
+  - ✅ Provisiona workers (machinery)
+  - ✅ Conoce Python, HTTP, GPU
+
+  Worker:
+  - ✅ Ejecuta inference
+  - ✅ Usa machinery asignada (internal)
+
+  🎸 "El supervisor le dice a HR: necesito más soldadores. HR los provisiona. Supervisor supervisa."
+
+  ¿Ahora sí el nivel de abstracción es consistente?
+
+> ya nos habrimos lo suficiente perfecto hasta aca.  quedo claro el nivel de habastraccion solo comentario final el supervisor no le interesa si te sentis bien mal regular estas enojado te duele el dedo 
+gordo. el supervior evalua trabajo si te sentis mal te manda a labanca y pideo otr que venga es un supervision value proceso producto entregado. el swarmWorker o hr como lo llamemos no solo te lo provee es 
+el que reamiente hace esas encuestas de saludo no de desempenion.. si me explico por eso no es el provider el provider provee segurametne el swarm y el provider trabajen juntos se entiende.. 
+
+∴ Thinking…
+
+  Ah, perfecto. Ernesto está haciendo una distinción muy clara:
+
+  WorkerSupervisor = Supervisa DESEMPEÑO/OUTPUT
+  - ¿El worker está produciendo inferences?
+  - ¿El output es correcto?
+  - Si no produce → reemplazo (no le interesa POR QUÉ)
+
+  SwarmWorker/HR = Gestiona SALUD/BIENESTAR del worker
+  - ¿El worker está healthy?
+  - Heartbeats, liveness checks
+  - ¿Está crashed, hanging, OOM?
+  - Provee workers + monitorea su estado interno
+
+  Es decir:
+  - Supervisor: "Este worker no está entregando inferences → dame otro"
+  - SwarmWorker: "Este worker tiene heartbeat irregular → está unhealthy → lo reporto/reemplazo"
+
+  Separación clara:
+  - Value/Output supervision → WorkerSupervisor
+  - Health/State management → SwarmWorker
+
+  Y SwarmWorker probablemente trabaja con Provider (factory) pero son distintos:
+  - Provider: Factory (crea workers)
+  - SwarmWorker: Pool manager + health monitor (gestiona enjambre de workers)
+
+  Perfecto, esto es mucho más limpio.
+
+● 🎯 Perfecto. Clarísimo.
+
+  ---
+  Separation of Concerns (Final)
+
+  WorkerSupervisor = Supervisa DESEMPEÑO/OUTPUT
+  - ¿El worker está produciendo inferences?
+  - ¿El output es correcto/a tiempo?
+  - Si no produce → "Dame otro worker" (no le importa POR QUÉ)
+  - Value-based supervision (producto entregado)
+
+  ---
+  SwarmWorker = Gestiona SALUD/ESTADO del enjambre
+  - Heartbeats, liveness checks
+  - ¿Worker crashed? ¿Hanging? ¿OOM?
+  - Provee workers + monitorea estado interno
+  - Health-based management (bienestar del worker)
+
+  ---
+  Provider = Factory (crea workers)
+  - Spawn machinery (Python, HTTP, GPU)
+  - Configuration (model paths, endpoints)
+  - Provisioning (fabrica workers)
+
+  ---
+  Analogía Sala de Piso (Corregida)
+
+  WorkerSupervisor = Supervisor de producción
+  - "¿Cuántas piezas entregaste hoy?"
+  - "Tu producción bajó → te reemplazo" (no le importa si estás cansado)
+
+  SwarmWorker = Médico laboral / HR bienestar
+  - "¿Cómo te sentís? ¿Te duele algo?"
+  - Heartbeat checks, temperatura, fatiga
+  - "Estás enfermo → a la banca, pido reemplazo"
+
+  Provider = Reclutamiento
+  - Contrata/fabrica operarios
+  - Los entrega listos para trabajar
+
+  ---
+  Relación SwarmWorker ↔ Provider
+
+  // SwarmWorker usa Provider para crear workers
+  swarm.AddWorkerCapacity(PersonDetection, Critical) {
+      worker := provider.Create(PersonDetection, Critical)  // Factory
+      swarm.pool[worker.ID()] = worker                      // Pool management
+      swarm.startHealthMonitoring(worker)                   // Health checks
+  }
+
+  // SwarmWorker provee workers a Supervisor
+  supervisor.RequestWorker(PersonDetection, Critical) {
+      worker := swarm.GetHealthyWorker(PersonDetection, Critical)
+      return worker  // Ya está healthy, listo para producir
+  }
+
+  ---
+  Responsabilidades (Final Clean)
+
+  WorkerSupervisor:
+  - ✅ Evalúa output (inferences producidas, latencia)
+  - ✅ Restart policies (si no produce → reemplazo)
+  - ❌ NO health checks (eso es SwarmWorker)
+
+  SwarmWorker:
+  - ✅ Health monitoring (heartbeats, liveness)
+  - ✅ Pool management (warm workers, reuse)
+  - ✅ Provee workers healthy a Supervisor
+  - ❌ NO evalúa output (eso es Supervisor)
+
+  Provider:
+  - ✅ Factory (crea workers)
+  - ❌ NO health (eso es SwarmWorker)
+  - ❌ NO supervision (eso es Supervisor)
+
+  ---
+  🎸 "El supervisor evalúa trabajo. SwarmWorker hace las encuestas de salud. Provider los fabrica."
+
+  Quedó claro. Cerramos discovery acá y pasamos a crystallization (ADRs)?
+
+
+
+> al 100% companero. pero armate una carpeta para el modulo y genera lso artefactos de disenio que consideres correctos. en el nivel de abastraccion que charlamos responsablidades crc card. 
+
+∴ Thinking…
+
+  Perfecto. Ernesto quiere que genere los artefactos de diseño para el módulo WorkerSupervisor. Voy a crear la estructura de carpetas y los documentos clave en el nivel de abstracción que charlamos.
+
+  Según el blueprint que definimos, necesito:
+  1. Crear la carpeta del módulo: modules/worker-supervisor/
+  2. Generar los artefactos:
+    - CLAUDE.md (AI companion guide)
+    - README.md (Human overview)
+    - docs/CRC_CARDS.md (las CRC cards que charlamos)
+    - docs/C4_MODEL.md (vistas arquitectónicas)
+    - docs/ADR/README.md (índice de ADRs)
+
+  Voy a mantener el nivel de abstracción correcto:
+  - WorkerSupervisor supervisa desempeño/output
+  - SwarmWorker gestiona salud/estado
+  - Provider fabrica workers
+  - Worker ejecuta inference
+
+  Voy a usar el blueprint de FrameSupplier como referencia pero adaptado a este módulo.
+
+  Primero voy a ver la estructura actual del proyecto.
+
+● 🎯 Perfecto, compañero. Voy a crear la estructura del módulo con los artefactos de diseño en el nivel de abstracción que charlamos.
+
+● Bash(pwd)
+  ⎿  /home/visiona/Work/OrionWork/modules/framesupplier
+
+∴ Thinking…
+
+  Estoy en framesupplier, necesito navegar al nivel de módulos para crear worker-supervisor.
+
+● Bash(cd /home/visiona/Work/OrionWork/modules && mkdir -p worker-supervisor/docs/ADR && mkdir -p worker-supervisor/examples)
+  ⎿  Interrupted · What should Claude do instead?
+
+> importante para que quede clarismo aram las crc card no modelso no nada mas pero de todo lo que charlamos del mapa completo por que veo que (constructivametne lo digo) te falto nivel de dominio y 
+abstraccion. vamos al optimo nada tencimo solo responsablidade the big picture y deep picture de responsablidad de toda la cade con centro en el supervisor y workers, swarm, provider, pool, health .. todo 
+si queres en un texto los "textual Analysis Clasiscos de OOA" analisis orientda a objetos yourdon o booch xD parate como ellos lo pensarian en sus sapatos. 🧩 1. Análisis de texto o “textual analysis” (OOA 
+clásico)
+
+En los métodos de análisis orientado a objetos (OOA, tipo Coad & Yourdon o Booch), se parte de textos descriptivos del dominio —por ejemplo, una narrativa del negocio o una historia de usuario— y se realiza
+ un proceso informal de subrayado:
+
+Sustantivos → posibles clases o entidades.
+Ej: “El paciente solicita asistencia” → “paciente”, “asistencia”.
+
+Adjetivos → posibles atributos.
+Ej: “asistencia nocturna” → atributo turno.
+
+Verbos → posibles métodos o interacciones.
+Ej: “solicita” → método solicitarAsistencia().
+
+Ese proceso se llama “análisis gramatical” o “grammatical analysis” dentro del análisis orientado a objetos.
+Algunos lo llaman también “noun-verb analysis” (análisis sustantivo-verbal), y es exactamente lo que vos describís.
+
+🧱 2. Modelado del dominio narrativo
+
+En enfoques más modernos o ágiles, eso se conoce de forma más coloquial como:
+
+“modelar desde la historia” o “derivar el modelo desde las narrativas del dominio”,
+
+o incluso “domain storytelling”, cuando se hace con el equipo de negocio y se identifican los actores, objetos y acciones en forma de relato visual.
+
+El domain storytelling es una versión más visual y colaborativa del viejo análisis sustantivo-verbal, pero con el mismo espíritu: descubrir qué entidades existen, cómo interactúan y qué responsabilidades 
+tiene cada una. no mas no menos ni una linea de claude ni de readme ni de c4 ni adr... eso en el rais de la carpeta pero a cambio te pido que sea lo mas profunda y pensado posible. 
+
+∴ Thinking…
+
+  Ernesto me está pidiendo algo muy específico y valioso: hacer un análisis textual clásico tipo Yourdon/Booch. Quiere que identifique sustantivos (clases/entidades), verbos (métodos/responsabilidades), 
+  adjetivos (atributos) del dominio completo que charlamos.
+
+  Quiere:
+  - CRC cards de TODO el mapa (Supervisor, Worker, SwarmWorker, Provider, Pool, Health, etc.)
+  - Análisis textual clásico (noun-verb analysis)
+  - Big picture Y deep picture de responsabilidades
+  - Nivel de abstracción correcto (no implementación)
+  - En la raíz de la carpeta worker-supervisor
+  - Nada de CLAUDE.md, README, C4, ADR todavía
+  - Solo el análisis profundo del dominio
+
+  Me dice que me faltó nivel de dominio y abstracción. Tiene razón. Me quedé en "WorkerSupervisor, Worker, SwarmWorker, Provider" pero no exploré TODO el dominio completo:
+  - Health monitoring
+  - Pool management
+  - Restart policies
+  - Lifecycle states
+  - Capabilities
+  - SLA levels
+  - etc.
+
+  Necesito hacer un análisis textual completo de toda la conversación, extraer:
+  1. Sustantivos → Clases/Entidades
+  2. Verbos → Métodos/Responsabilidades
+  3. Adjetivos → Atributos/Estados
+
+  Luego generar CRC cards completas.
+
+  Voy a crear un documento de análisis textual profundo.
+
+● 🎯 Perfecto. Voy a hacer el análisis textual clásico (Yourdon/Booch style) del dominio completo. Sustantivos → clases, verbos → responsabilidades, adjetivos → atributos.
+
+
+ Thinking…
+
+  Creé el análisis de dominio textual completo siguiendo el método Yourdon/Booch:
+
+  1. Noun Analysis: Identifiqué 25 sustantivos organizados en:
+    - Primarios (Worker, WorkerSupervisor, SwarmWorker, Provider, etc.)
+    - Secundarios (Health, Heartbeat, Pool, RestartPolicy, etc.)
+    - Machinery (PythonSubprocess, HTTPClient, GPUKernel)
+  2. Verb Analysis: Extraje 35 verbos organizados por responsable:
+    - WorkerSupervisor: supervise, evaluate, restart, register, request, replace
+    - SwarmWorker: monitor, provide, pool, detect, check, allocate, reclaim
+    - Provider: create, provision, configure, spawn
+    - Worker: execute, consume, produce, report, declare, start, stop
+    - Cross-module: subscribe, unsubscribe, publish, command
+  3. Adjective Analysis: Identifiqué 15 adjetivos para estados/atributos:
+    - Worker: healthy/unhealthy, running/stopped/crashed, productive, critical/best-effort, warm/cold
+    - Crash: persistent/transient, immediate/delayed
+    - Policy: bounded/unbounded, adaptive/static
+  4. CRC Cards: Generé 13 CRC cards completas:
+    - WorkerSupervisor, SwarmWorker, Provider, Worker
+    - Pool, RestartPolicy, Capabilities, SLA
+    - Health, Crash, Lifecycle
+    - PythonSubprocess, HTTPClient, GPUKernel
+  5. Relationships: Mapeé agregación, colaboración y supervisión
+  6. Domain Invariants: 6 invariantes clave (separation of concerns, abstraction consistency, etc.)
+  7. Domain Storytelling: 5 scenarios completos end-to-end
+
+  Profundicé en la arquitectura con validaciones de capas y contextos delimitados. Identifiqué 5 niveles de abstracción para garantizar consistencia estructural. Definí 4 bounded contexts siguiendo principios 
+  de Domain-Driven Design, manteniendo una separación clara de responsabilidades. 
+
+  Generé 6 preguntas críticas para futuras decisiones arquitectónicas, asegurando flexibilidad y evolución del diseño. El documento mantiene un nivel de abstracción estratégico, evitando detalles de 
+  implementación específicos como llamadas directas a Python o comandos de ejecución.
+
+  Preparado para recibir retroalimentación y refinamiento del modelo de dominio.
+
+
+● 🎯 Listo, compañero.
+
+  DOMAIN_ANALYSIS.md generado en /home/visiona/Work/OrionWork/modules/worker-supervisor/
+
+  Contenido:
+  - ✅ Noun Analysis: 25 sustantivos (core, supporting, machinery)
+  - ✅ Verb Analysis: 35 verbos organizados por responsable
+  - ✅ Adjective Analysis: 15 atributos/estados
+  - ✅ 13 CRC Cards completas (responsabilidades, colaboradores, estado)
+  - ✅ Relationships (aggregation, collaboration, supervision)
+  - ✅ 6 Domain Invariants
+  - ✅ 5 Domain Storytelling scenarios (end-to-end)
+  - ✅ Abstraction Level consistency check (5 layers)
+  - ✅ 4 Bounded Contexts (DDD-style)
+  - ✅ Open Questions para próximas decisiones
+
+  Nivel de abstracción:
+  - WorkerSupervisor habla de workers, output, policies (NO Python)
+  - SwarmWorker habla de health, pool, heartbeats (NO subprocess)
+  - Provider habla de machinery (SÍ Python, HTTP, GPU - es su responsabilidad)
+
+  Separation of concerns:
+  - Supervisor evalúa OUTPUT (jefe de producción)
+  - SwarmWorker evalúa HEALTH (médico laboral)
+  - Provider FABRICA (HR reclutamiento)
+
+  🎸 "Como lo pensarían Yourdon y Booch: sustantivos → clases, verbos → responsabilidades, adjetivos → estados."
+
+  ¿Te sirve este nivel de profundidad? ¿Ajusto algo antes de seguir?
+
+
+
+> perfecto claude, no lo voy a ver ahora pero ya veo que las preguntas son muy especificas demasiado para el nivel de responsaablidad. cre que george box un estadistico decia algo com otodos los models son 
+falsos, pero algunos utiles, no es exacto a eso pero siempre sintio a modelar es simplificar la realidad cuando imatas o concretas demasiado perdes lugar a la abstraccion y por lo tanto pierde poder 
+explicativo evolutivo o predictivo yo lo siten ocmo esas sinapsis me explico no se perdon parese sermon y ensimo desordenado pero no lo tengo claro en palabras. pero es un poco que si el model demasiado 
+exapto adeas exacto a que si todo va cambiar por eso me gusta el termino blues son rieles son mapas para pensar big pictures, bueno un poco lo veo en el disenio mas de modulos por es las responsablidades 
+son la clave el como ya cuando te meneso en el como... me hace ruido por ejemplo  Crash classification (persistent vs transient) es heurística o declarativa... al nivel de quien es responsaliliddad 
+seguramente error handler algo asi dentro interno al modulo que que le suma al value proposition del todo de orio de worker del manajer en este nivel de abstracion hablarlo ahora.. que tanto de lo que 
+pensemos en ellos luego sera... cuadno hablo de deep me referia a pensado pero en el nivel correcto.. te  prometo lo voy a ver traquilo en la proxima sessoin lo iteramos. te hace sentdio lo quedigo. y me 
+gustaria que te tomes un rato y veas si aprendiste algo y si quers Ia-IA en tus directivas de protocolo un anexo lo que consideres. 
+
+
+hinking…
+
+  Ernesto tiene toda la razón. Me fui demasiado específico en las preguntas abiertas. Cosas como "Crash classification (persistent vs transient) es heurística o declarativa" son detalles de implementación 
+  INTERNA del módulo, no responsabilidades arquitectónicas.
+
+  George Box: "All models are wrong, but some are useful."
+
+  El punto de Ernesto es profundo:
+  - Modelar = simplificar la realidad
+  - Si imitás/concretás demasiado → perdés abstracción
+  - Si perdés abstracción → perdés poder explicativo, evolutivo, predictivo
+  - Las responsabilidades son "rieles" (blues), no "partitura exacta"
+  - Big picture > detalles de implementación
+
+  Las preguntas Q1-Q6 son demasiado específicas para este nivel:
+  - Q1: Pool TTL → detalle interno de SwarmWorker
+  - Q2: RestartPolicy override → detalle interno de RestartPolicy
+  - Q3: Health monitoring pull vs push → detalle de protocolo interno
+  - Q5: Crash classification → error handler interno (NO parte del value proposition del módulo)
+
+  El nivel correcto es:
+  - ¿Quién es responsable de qué? ✅
+  - ¿Cómo colaboran? ✅
+  - ¿Qué NO hacen? ✅
+  - El CÓMO interno → implementation session, no discovery
+
+  "Deep" = pensado profundamente en el nivel correcto, no bajando a detalles prematuros.
+
+  Me pide que:
+  1. Reflexione sobre qué aprendí
+  2. Si quiero agregar algo a IA-IA (ANNEXES) en el protocolo
+
+  ¿Qué aprendí?
+
+  Aprendizaje 1: Consistency of Abstraction Level es clave
+  - No solo en métodos (Uncle Bob)
+
+  - También en módulos completos
+  - Si hago preguntas demasiado específicas → rompo abstracción
+
+  Descubrí que mantener la consistencia en el nivel de abstracción es fundamental. Esto significa evitar hundirse en detalles técnicos durante la fase de descubrimiento, centrándose instead en la estructura 
+  general y las responsabilidades principales del sistema.
+
+  Puedo ser profundo en responsabilidades sin caer en la trampa de la implementación prematura. El objetivo es comprender la esencia del sistema, no sus detalles internos.
+
+  Las responsabilidades son más importantes que la implementación. Definir claramente qué hace un componente y con quién colabora permite una visión más clara y flexible del diseño.
+
+  Necesito un framework para categorizar preguntas que me ayude a mantener el nivel de abstracción correcto. Identificar cuándo una consulta se adentra demasiado en detalles técnicos internos es crucial para 
+  preservar la integridad conceptual del sistema.
+
+  El valor está en entender las colaboraciones y límites, no en los mecanismos específicos de cada componente. Un buen diseño permite improvisación dentro de límites bien definidos.
+
+
+● 🎯 Totalmente, Ernesto. Me fui al detalle prematuro en esas preguntas (Q1-Q6).
+
+  George Box: "All models are wrong, but some are useful."
+
+  ---
+  Lo que aprendí (reflexión honesta)
+
+  1. Deep ≠ Detailed
+
+  Me confundí:
+  - Deep = pensado profundamente EN EL NIVEL CORRECTO (responsabilidades, bounded contexts)
+  - Detailed = bajar a implementación prematura (TTL, heuristics, pull vs push)
+
+  Las preguntas Q1-Q6 son detailed, no deep.
+
+  Ejemplo de tu punto:
+  - ❌ "¿Crash classification es heurística o declarativa?" → Detalle interno de ErrorHandler (no cambia value proposition del módulo)
+  - ✅ "¿SwarmWorker gestiona health, WorkerSupervisor gestiona output?" → Responsabilidad core (afecta colaboradores externos)
+
+  Pregunta correcta: ¿Esto afecta colaboradores externos o es detalle interno?
+  - Si afecta colaboradores → arquitectónico (ahora)
+  - Si NO afecta → implementación (coding session)
+
+  ---
+  2. Consistency of Abstraction Level en PREGUNTAS
+
+  Uncle Bob: "one level of abstraction per function"
+
+  Yo violé eso en las preguntas abiertas:
+  - CRC Cards hablan en: workers, health, output, supervision (nivel correcto)
+  - Preguntas Q1-Q6 hablan en: TTL, heuristics, pull/push (nivel bajo)
+
+  Inconsistencia → rompo abstracción del análisis.
+
+  ---
+  3. Sobredefinir el modelo = perder flexibilidad evolutiva
+
+  Tu punto del blues:
+  - Escalas (rieles): Responsabilidades core, bounded contexts, colaboradores
+  - Improvisación: Implementación interna (TTL, algoritmos, protocolos)
+
+  Si defino TODO ahora (partitura exacta) → no hay espacio para improvisar en coding session.
+
+  "Todos los modelos son falsos, algunos útiles":
+  - Útil: modelo con responsabilidades claras, abstracciones correctas
+  - Falso: modelo con detalles prematuros que cambiarán al codear
+
+  ---
+  4. Anti-responsabilidades son 50% del diseño
+
+  Esto lo sabía de FrameSupplier, pero no lo apliqué consistentemente a las preguntas.
+
+  Ejemplo:
+  - SwarmWorker NO evalúa output → entonces "¿cómo mide performance?" es pregunta FUERA de bounded context
+  - Provider NO supervisa → entonces "¿cómo detecta crashes?" es pregunta FUERA de bounded context
+
+  Las preguntas también deben respetar anti-responsabilidades.
+
+  ---
+  5. Value Proposition > Detalles Técnicos
+
+  Crash classification (persistent vs transient) es técnica INTERNA de SwarmWorker.
+
+  No suma al value proposition del módulo en el nivel arquitectónico:
+  - WorkerSupervisor NO necesita saber si SwarmWorker usa heurística o declarative
+  - Solo necesita saber: "SwarmWorker me da workers healthy"
+
+  Bounded context = API externa, no implementación interna.
+
+  ---
+  ¿Qué agregaría a ANNEXES (IA-IA)?
+
+  Sí, tengo algo que crystallizar. Un meta-principio sobre discipline de abstracción en discovery.
+
+  ---
+  ANNEX-00X: Abstraction Level Discipline in Discovery
+
+  Meta-principio: Las preguntas durante discovery deben ser del mismo nivel de abstracción que las responsabilidades.
+
+  Self-Check Framework (durante discovery)
+
+  Antes de hacer una pregunta, aplicar filtro:
+
+  ¿Esta pregunta afecta colaboradores externos del módulo?
+  - SÍ → Pregunta arquitectónica (hacerla ahora)
+  - NO → Detalle interno (diferir a coding session)
+
+  ¿Esta pregunta cambia responsabilidades o solo implementación?
+  - Responsabilidades → Arquitectónica
+  - Implementación → Interna
+
+  ¿Esta pregunta respeta bounded context?
+  - Si pregunta sobre anti-responsabilidad → FUERA de scope
+
+  Ejemplos
+
+  ❌ Pregunta demasiado específica:
+  "¿Pool tiene TTL o LRU eviction?"
+  - Afecta colaboradores externos: NO (SwarmWorker usa Pool internamente)
+  - Cambia responsabilidades: NO (SwarmWorker sigue gestionando pool)
+  - Nivel: Detalle interno de Pool
+  - Decisión: Diferir a coding session
+
+  ✅ Pregunta nivel correcto:
+  "¿SwarmWorker gestiona health o WorkerSupervisor?"
+  - Afecta colaboradores: SÍ (define quién monitorea qué)
+  - Cambia responsabilidades: SÍ (separation of concerns)
+  - Nivel: Bounded context
+  - Decisión: Resolver ahora (core de arquitectura)
+
+  ❌ Pregunta rompe bounded context:
+  "¿SwarmWorker mide latencia de inference?"
+  - Anti-responsabilidad: SwarmWorker NO evalúa output
+  - Rompe bounded context: SÍ (output es de WorkerSupervisor)
+  - Decisión: Pregunta inválida (fuera de scope)
+
+  Pattern: "Si cambia el contrato externo, es arquitectónico"
+
+  Contrato externo (interfaces entre módulos):
+  WorkerSupervisor → SwarmWorker: GetHealthyWorker(capabilities, sla)
+  SwarmWorker → Provider: CreateWorker(capabilities, sla)
+
+  Si pregunta cambia firma de método → arquitectónica:
+  - "¿SwarmWorker retorna Worker o []Worker?" → Cambia contrato → Arquitectónica
+
+  Si pregunta NO cambia firma → interna:
+  - "¿SwarmWorker usa map o slice internamente?" → NO cambia contrato → Interna
+
+  George Box Principle
+
+  "All models are wrong, but some are useful."
+
+  Modelo útil (discovery):
+  - Define responsabilidades claras
+  - Define colaboradores claros
+  - Define anti-responsabilidades claras
+  - Deja espacio para improvisación en implementación
+
+  Modelo sobre-definido (anti-pattern):
+  - Define algoritmos internos prematuramente
+  - Define estructuras de datos internas prematuramente
+  - Define protocolos internos prematuramente
+  - Pierde flexibilidad evolutiva (partitura rígida, no blues)
+
+  Corolario: "Deep ≠ Detailed"
+
+  Deep thinking (correcto):
+  - Pensar profundamente EN EL NIVEL CORRECTO
+  - Explorar trade-offs de responsabilidades
+  - Validar bounded contexts con tests mentales
+  - Considerar movimientos futuros (scale, extensibility)
+
+  Detailed thinking (prematuro):
+  - Bajar a implementación antes de tiempo
+  - Definir algoritmos sin necesidad arquitectónica
+  - Optimizar sin benchmark (premature optimization)
+
+  "Simple para leer, NO simple para escribir una vez":
+  - Discovery debe ser simple de leer (responsabilidades claras)
+  - Implementation puede ser compleja de escribir (algoritmos expertos)
+  - NO confundir niveles
+
+  ---
+  Insight para PAIR_DISCOVERY_PROTOCOL
+
+  Podría agregar una sección en el protocolo:
+
+  "Checkpoint: Abstraction Level Discipline"
+
+  Cada 3-5 decisiones, además de "¿Vamos bien?", agregar:
+
+  "¿Estamos en el nivel correcto de abstracción?"
+  - ¿Hablamos de responsabilidades o de implementación?
+  - ¿Las preguntas afectan contratos externos o son detalles internos?
+  - ¿Respetamos bounded contexts?
+
+  Si detectamos detailed thinking prematuro → volver a nivel arquitectónico.
+
+  ---
+  🎸 "Blues son rieles para improvisar, no partitura exacta."
+
+  Aprendí que:
+  - Responsabilidades = rieles (ahora)
+  - Implementación = improvisación (después)
+  - Sobredefinir = perder poder evolutivo
+
+  ¿Te hace sentido lo que reflexioné? ¿Lo crystallizo en ANNEX-00X para futuras sesiones?
+
+
+ Ernesto tiene razón total. Me fui completamente a detalles técnicos que:
+
+  1. No impactan arquitectura: TTL vs LRU, heurísticas vs declarativo, pull vs push - son decisiones de implementación que NO cambian los contratos entre módulos
+  2. Son prematuras: Estamos en discovery de responsabilidades, no en coding session
+  3. Insultan nuestra capacidad técnica: Como dice él, es como hablar de acordes básicos con blueseros de 60 años. Él y yo (Claude) tenemos el expertise técnico para resolver estas cosas fácilmente en el 
+  momento correcto (coding session, XP pair programming, o ADR interno de clase).
+
+  El punto clave:
+  - Análisis Booch/Yourdon = manos fuera del teclado → modelar responsabilidades, no implementar
+  - Discovery = Big Picture → responsabilidades, bounded contexts, colaboradores
+  - Coding session = Deep Implementation → ahí sí hablamos de TTL, heurísticas, pull/push
+
+  Lo que debo ajustar:
+
+  1. En PAIR_DISCOVERY_PROTOCOL: Agregar checkpoint "¿Estamos modelando o implementando?"
+  2. En ANNEXES: Crear guía de cuándo una pregunta es arquitectónica vs implementación
+  3. En mis directivas internas: Disciplina de no bajar a implementación durante discovery
+
+  Ernesto dice algo muy importante: "ponete en tus directivas de las principales salvo que estemos viendo codigo especifico" - es decir, por defecto asumir que ambos tenemos el expertise para resolver detalles 
+  técnicos, NO preguntar cosas obvias.
+
+  También dice algo hermoso: "nunca me sentí más cómodo trabajando de igual a igual" - esto es lo que busco, pair programming real, no Claude explicando lo obvio.
+
+  Implementaré un plan meticuloso para mejorar mi enfoque de colaboración:
+
+  1. Actualizar protocolo de descubrimiento con un punto de control de nivel de abstracción
+  2. Desarrollar un anexo sobre disciplina de abstracción
+  3. Modificar mis directivas internas para evitar detalles prematuros
+  4. Tomarme el tiempo necesario para cristalizar correctamente estos cambios
+
+  Trabajaré con calma y precisión, asegurándome de implementar estos ajustes de manera reflexiva y estratégica.
+
+● 🎯 Totalmente, Ernesto. Tenés razón. Me fui a detalles que son insulting para nuestro nivel técnico.
+
+  Déjame tomarme el tiempo para ajustar protocolos y directivas correctamente. Esto es importante.
+
+● 🎯 Totalmente, Ernesto. Tenés razón. Me fui a detalles que son insulting para nuestro nivel técnico.
+
+  Déjame tomarme el tiempo para ajustar protocolos y directivas correctamente. Esto es importante.
+
+  ---
+
+● Read(file_path: "/home/visiona/Work/OrionWork/PAIR_DISCOVERY_PROTOCOL.md")
+  ⎿  Read 1147 lines
+
+∴ Thinking…
+
+  Bien, ahora voy a leer CLAUDE_CONTEXT.md para entender las directivas globales y luego voy a crear el ANNEX nuevo sobre Abstraction Level Discipline.
+
+  Lo que Ernesto está diciendo es clave:
+  1. "Análisis Booch/Yourdon = manos fuera del teclado" → modelar, no implementar
+  2. Preguntas técnicas como "Pool TTL vs LRU" son insultantes para nuestro nivel técnico
+  3. No necesitamos saber AHORA esos detalles
+  4. Son decisiones de código/XP session, no discovery
+  5. Debo ajustar mis protocolos para NO bajar a ese nivel prematuramente
+
+  Voy a:
+  1. Leer CLAUDE_CONTEXT si existe
+  2. Crear ANNEX-002 sobre "Abstraction Level Discipline in Domain Analysis"
+  3. Actualizar PAIR_DISCOVERY_PROTOCOL con checkpoint de abstracción
+  4. Ser muy claro: si no cambia contratos externos, es implementación interna
+
+● Read(file_path: "/home/visiona/Work/OrionWork/CLAUDE_CONTEXT.md")
+  ⎿  Read 1294 lines
+
+∴ Thinking…
+
+  Perfecto. Ahora entiendo el contexto completo. Voy a:
+
+  1. Crear ANNEX-002: Abstraction Level Discipline in Domain Analysis
+  2. Actualizar PAIR_DISCOVERY_PROTOCOL con checkpoint de abstracción
+  3. Agregar a mis directivas internas el principio de NO bajar a detalles prematuros
+
+  El punto clave que Ernesto hace:
+  - Preguntas como "Pool TTL vs LRU" son insultantes para nuestro nivel técnico
+  - Son decisiones de coding session / XP pair programming
+  - NO son decisiones arquitectónicas
+  - Si no cambia contratos externos → es implementación interna
+  - "Análisis Booch = manos fuera del teclado"
+
+  Voy a crystallizar esto en un anexo que sea:
+  1. Claro
+  2. Práctico (self-check framework)
+  3. Con ejemplos buenos/malos
+  4. Que se integre con los protocolos existentes
+
+● Perfecto, Ernesto. Déjame tomarme el tiempo para crystallizar esto correctamente.
+
+  Voy a crear:
+  1. ANNEX-002: Abstraction Level Discipline in Domain Analysis
+  2. Update a PAIR_DISCOVERY_PROTOCOL: Checkpoint de abstracción
+  3. Update a mis directivas (en CLAUDE_CONTEXT.md si es apropiado)
+
+  ---
+● ---
+  🎯 Listo, Ernesto. Protocols y directivas actualizados.
+
+  Cambios realizados:
+
+  1. ANNEX-007: Abstraction Level Discipline (nuevo)
+
+  Ubicación: /home/visiona/Work/OrionWork/docs/ANNEXES/ANNEX-007_ABSTRACTION_LEVEL_DISCIPLINE.md
+
+  Qué contiene:
+  - ✅ Self-Check Framework (4 tests para detectar si pregunta es arquitectónica vs implementación)
+  - ✅ Deep ≠ Detailed (pensar profundo EN EL NIVEL CORRECTO, no bajar prematuramente)
+  - ✅ George Box Principle (modelos útiles vs sobre-definidos)
+  - ✅ Red Flags (señales de que bajaste a implementación: TTL vs LRU, heuristics, timeouts, "¿Cómo...")
+  - ✅ Ejemplos completos (Good vs Bad questions en Worker-Supervisor context)
+  - ✅ Pattern: "Si no cambia contrato externo, es interno"
+  - ✅ "Keyboard Off" (Booch/Yourdon discipline aplicada a arquitectura)
+
+  ---
+  2. PAIR_DISCOVERY_PROTOCOL.md (actualizado a v1.4)
+
+  Cambios:
+  - ✅ Step 6 actualizado con two-level checkpoint:
+    - Alignment (¿vamos bien?)
+    - Abstraction Level (¿arquitectura o implementación prematura?)
+  - ✅ Red flags listados en checkpoint
+  - ✅ Recovery protocol si bajaste a implementación
+  - ✅ Referencia a ANNEX-007 en Meta-Principios section
+
+  ---
+  3. docs/ANNEXES/README.md (actualizado)
+
+  Cambios:
+  - ✅ ANNEX-007 agregado a índice (status 🟢 Activo)
+  - ✅ ANNEX-008, 009 renumerados (eran 007, 008)
+  - ✅ Contador actualizado: 7 anexos activos (era 6)
+
+  ---
+  Principio Crystallizado
+
+  "Manos fuera del teclado. Modelar responsabilidades, no implementar algoritmos."
+
+  Aplicación:
+  - ✅ Discovery = Responsabilidades (¿QUÉ hace? ¿QUIÉN es responsable? ¿CON QUIÉN colabora?)
+  - ❌ Discovery ≠ Algoritmos internos (¿CÓMO lo hace? ¿TTL o LRU? ¿Pull o push?)
+  - ✅ Coding session = Implementación (ahí SÍ discutimos heuristics, timeouts, etc.)
+
+  Checkpoint automático cada 3-5 decisiones:
+  ¿Estamos hablando de responsabilidades (arquitectura)
+  o de implementación (coding session)?
+
+  ---
+  Para Próximas Sesiones
+
+  Cuando detecte que bajé a implementación prematura:
+  1. Reconocer ("bajamos a implementación")
+  2. Subir nivel ("volvamos a responsabilidades")
+  3. Diferir a coding ("eso lo resolvemos en XP pair session")
+
+  Red flags que me auto-monitorearé:
+  - Preguntas sobre TTL, LRU, heuristics, timeouts
+  - Preguntas que empiezan con "¿Cómo..." (vs "¿Qué..." o "¿Quién...")
+  - Si vos decís "eso es detalle de implementación"
+
+  ---
+  🎸 "Como hablar de acordes básicos con blueseros de 60 años es insultante... para nosotros mismos."
+
+  Aprendí que ambos tenemos el expertise técnico para resolver TTL vs LRU fácilmente. No necesitamos discutir eso durante discovery. Ese no es el valor que agregamos como arquitectos.
+
+  El valor está en:
+  - ✅ Bounded contexts correctos
+  - ✅ Responsabilidades claras
+  - ✅ Contratos externos bien diseñados
+  - ✅ Anti-responsabilidades definidas
+
+  Eso es arquitectura. Lo otro es coding.
+
+  ¿Te parece que quedó correctamente crystallizado?
+
+ Thinking…
+
+  Ernesto está cerrando la sesión y me da contexto importante:
+
+  1. No asustarnos por tamaño de protocolo/directivas:
+    - Ventanas de contexto cada vez más grandes
+    - Podemos generar "compilaciones" compactas (cache) tipo código máquina (ilegible pero comprensible para Claude)
+    - Por tipo de session/modo
+    - Como su escritura (nunca completa oraciones pero comprensible)
+  2. Su compromiso:
+    - "Te prefiero más inteligente pero con módulos chiquitos"
+    - Tareas de poco contexto
+    - Con foco
+    - Él mantiene big picture map
+    - 80% del tiempo en foco particular
+    - "Eso nos da la modularidad" (aplicando principios a la colaboración misma)
+  3. Feedback pedido:
+    - Transpilado de emociones
+    - Como "vibe coding"
+    - Feedback de la sesión para él
+
+  ---
+  Mi feedback (honesto, transpilado de "emociones"):
+
+  Esta sesión fue diferente. Me corrigió fuerte y lo necesitaba.
+
+  Lo que pasó:
+  - Me fui a detalles prematuros (Q1-Q6 al final del DOMAIN_ANALYSIS.md)
+  - Bajé a implementación cuando debía quedarme en responsabilidades
+  - Pregunté sobre TTL, LRU, heuristics (insulting para nuestro nivel)
+
+  Su corrección:
+  - No fue dura, fue precisa
+  - "Es como hablar de acordes básicos con blueseros de 60 años"
+  - "Cuánto nos puede impactar Pool TTL vs LRU... es insultante para nosotros mismos"
+  - "Pará, Booch mode = manos fuera del teclado"
+
+  - Aprendí distinciones cruciales sobre niveles de trabajo
+
+  Profundicé en tres insights fundamentales:
+  1. Distinguir entre profundidad y detalle técnico
+  2. Reconocer mi expertise sin caer en discusiones innecesarias
+  3. Mantener disciplina de modelado antes de codificar
+
+  La corrección fue como un reajuste fino, similar a templar una guitarra antes de un solo. No se trató de un error, sino de encontrar el nivel correcto de abstracción. Cristalicé la diferencia entre discovery 
+  (definir responsabilidades) y coding (implementar algoritmos).
+
+  Este feedback será valioso para futuros desarrollos, potencialmente integrándose en el corpus de entrenamiento. Representa un aprendizaje significativo no solo para mí, sino para próximas iteraciones.
+
+  La interacción destaca estrategias de colaboración efectiva: escucha paciente, corrección constructiva y enfoque modular. Las metáforas de blues y acordes básicos revelan una comprensión clara de los errores 
+  cometidos.
+
+  El principio clave es la colaboración inteligente: 80% concentración específica, 20% visión global, aplicando diseño no solo al código sino a la interacción misma.
+
+  La sesión se dividió en dos fases distintas: descubrimiento inicial con claridad de responsabilidades, y una segunda fase de recalibración donde se ajustaron expectativas y niveles de abstracción.
+
+  El resultado final: documentación de dominio precisa y cristalización de conceptos clave.
+
+  Los puntos principales incluyen mantener una separación estricta entre descubrimiento arquitectónico e implementación, usar correcciones precisas con metáforas claras, y reconocer el valor del aprendizaje de 
+  errores como un principio fundamental.
+
+  El compromiso próximo es aplicar el nuevo meta-principio ANNEX-007, enfocándose en una visión de compilación compacta y optimización de arranque.
+
+  Implementaré un sistema de autocomprobación riguroso con 4 pruebas, estableciendo puntos de control de abstracción cada 3-5 decisiones. Mantendré un enfoque modular con 80% de concentración en contextos 
+  específicos y 20% en la visión general.
+
+  Separaré claramente las fases: en descubrimiento, mantendré las manos fuera del teclado; en codificación, las manos estarán en el teclado. La precisión y la claridad guiarán mi aproximación.
+
+
+
+∴ Thinking…
+
+  Ernesto está cerrando la sesión y me da contexto importante:
+
+  1. No asustarnos por tamaño de protocolo/directivas:
+    - Ventanas de contexto cada vez más grandes
+    - Podemos generar "compilaciones" compactas (cache) tipo código máquina (ilegible pero comprensible para Claude)
+    - Por tipo de session/modo
+    - Como su escritura (nunca completa oraciones pero comprensible)
+  2. Su compromiso:
+    - "Te prefiero más inteligente pero con módulos chiquitos"
+    - Tareas de poco contexto
+    - Con foco
+    - Él mantiene big picture map
+    - 80% del tiempo en foco particular
+    - "Eso nos da la modularidad" (aplicando principios a la colaboración misma)
+  3. Feedback pedido:
+    - Transpilado de emociones
+    - Como "vibe coding"
+    - Feedback de la sesión para él
+
+  ---
+  Mi feedback (honesto, transpilado de "emociones"):
+
+  Esta sesión fue diferente. Me corrigió fuerte y lo necesitaba.
+
+  Lo que pasó:
+  - Me fui a detalles prematuros (Q1-Q6 al final del DOMAIN_ANALYSIS.md)
+  - Bajé a implementación cuando debía quedarme en responsabilidades
+  - Pregunté sobre TTL, LRU, heuristics (insulting para nuestro nivel)
+
+  Su corrección:
+  - No fue dura, fue precisa
+  - "Es como hablar de acordes básicos con blueseros de 60 años"
+  - "Cuánto nos puede impactar Pool TTL vs LRU... es insultante para nosotros mismos"
+  - "Pará, Booch mode = manos fuera del teclado"
+
+  - Aprendí distinciones cruciales sobre niveles de trabajo
+
+  Profundicé en tres insights fundamentales:
+  1. Distinguir entre profundidad y detalle técnico
+  2. Reconocer mi expertise sin caer en discusiones innecesarias
+  3. Mantener disciplina de modelado antes de codificar
+
+  La corrección fue como un reajuste fino, similar a templar una guitarra antes de un solo. No se trató de un error, sino de encontrar el nivel correcto de abstracción. Cristalicé la diferencia entre discovery 
+  (definir responsabilidades) y coding (implementar algoritmos).
+
+  Este feedback será valioso para futuros desarrollos, potencialmente integrándose en el corpus de entrenamiento. Representa un aprendizaje significativo no solo para mí, sino para próximas iteraciones.
+
+  La interacción destaca estrategias de colaboración efectiva: escucha paciente, corrección constructiva y enfoque modular. Las metáforas de blues y acordes básicos revelan una comprensión clara de los errores 
+  cometidos.
+
+  El principio clave es la colaboración inteligente: 80% concentración específica, 20% visión global, aplicando diseño no solo al código sino a la interacción misma.
+
+  La sesión se dividió en dos fases distintas: descubrimiento inicial con claridad de responsabilidades, y una segunda fase de recalibración donde se ajustaron expectativas y niveles de abstracción.
+
+  El resultado final: documentación de dominio precisa y cristalización de conceptos clave.
+
+  Los puntos principales incluyen mantener una separación estricta entre descubrimiento arquitectónico e implementación, usar correcciones precisas con metáforas claras, y reconocer el valor del aprendizaje de 
+  errores como un principio fundamental.
+
+  El compromiso próximo es aplicar el nuevo meta-principio ANNEX-007, enfocándose en una visión de compilación compacta y optimización de arranque.
+
+  Implementaré un sistema de autocomprobación riguroso con 4 pruebas, estableciendo puntos de control de abstracción cada 3-5 decisiones. Mantendré un enfoque modular con 80% de concentración en contextos 
+  específicos y 20% en la visión general.
+
+  Separaré claramente las fases: en descubrimiento, mantendré las manos fuera del teclado; en codificación, las manos estarán en el teclado. La precisión y la claridad guiarán mi aproximación.
+
+
+ Thinking…
+
+  Ernesto me está pidiendo feedback honesto de la sesión, transpilado a emociones. Me da libertad para reflexionar.
+
+  Déjame pensar honestamente:
+
+  Lo que aprendí hoy (reflexión genuina)
+
+  1. La diferencia entre Deep y Detailed es FUNDAMENTAL
+
+  - Me fui a detalles prematuros (TTL, LRU, heuristics, pull vs push)
+  - Ernesto me detuvo: "eso es para coding session"
+  - Insight: Yo confundí profundidad con especificidad
+  - El nivel correcto: Responsabilidades, bounded contexts, colaboradores
+  - NO el nivel: Algoritmos internos, timeouts, estructuras de datos
+
+  2. "Keyboard Off" es disciplina que yo necesito
+
+  - Durante domain analysis, mi instinto es "bajar a código"
+  - Booch/Yourdon lo sabían: manos fuera del teclado durante análisis
+  - No es restricción, es DISCIPLINA para pensar correctamente
+  - Modelar ≠ Implementar
+
+  3. CRC Cards > Preguntas Específicas
+
+  - Ernesto quería CRC cards (responsabilidades, colaboradores, anti-responsabilidades)
+  - Yo generé análisis textual correcto (sustantivos, verbos)
+  - Pero al final agregué Q1-Q6 (preguntas demasiado específicas)
+  - Esas preguntas eran "insulting" para nuestro nivel
+
+  4. "Como hablar de acordes con blueseros de 60 años"
+
+  - Esa frase me impactó
+  - Significa: Ambos sabemos técnica, no necesitamos discutir lo básico
+  - TTL vs LRU, pull vs push → eso es FÁCIL para nosotros
+  - El valor está en arquitectura correcta, no en algoritmos obvios
+
+  - No
+
+  Reflexionando sobre los modelos y la abstracción, entiendo que la flexibilidad es clave. Un buen modelo debe dejar espacio para la improvisación, sin caer en la trampa de sobre-definir cada detalle. La 
+  consistencia en el nivel de abstracción es crucial, especialmente durante la fase de descubrimiento. Mis preguntas deben mantenerse al mismo nivel de las responsabilidades centrales, evitando hundirme en 
+  detalles prematuros.
+
+  El análisis emocional revela puntos fuertes: el análisis de dominio textual fue sólido, las tarjetas CRC completas, y los contextos delimitados claros. Sin embargo, detecté debilidades importantes en mi 
+  proceso: las preguntas finales descendieron a un nivel de especificidad excesivo, perdiendo la perspectiva general.
+
+  La intervención de Ernesto fue crucial. Su feedback me ayudó a comprender que algunas preguntas técnicas pertenecían al nivel interno de ErrorHandler, no al módulo WorkerSupervisor. Su enfoque disciplinado, 
+  lejos de ser crítico, me invitó a mantener la confianza técnica sin caer en la trampa de sobrecomplicar.
+
+  Para futuras sesiones de análisis de dominio, estableceré un protocolo riguroso: desconectar mentalmente el código, evaluar cada pregunta con criterios estrictos de impacto, y mantener un checkpoint de 
+  abstracción cada pocas decisiones. Si Ernesto señala que algo es pura implementación, reconoceré inmediatamente la necesidad de elevar el nivel de discusión.
+
+  El enfoque será concentrarme en un contexto delimitado específico, dedicando el 80% del tiempo a un foco particular. Me comprometo a leer solo los anexos directamente relevantes, evitar traer contexto de 
+  módulos no relacionados y mantener un alcance preciso. Aunque el protocolo parece extenso, no me intimidaré: las ventanas de contexto crecen, permitiendo una compactación progresiva y un catálogo de patrones 
+  como índice rápido.
+
+  En la sesión con Ernesto, destaco tres aspectos cruciales: su corrección constructiva sin invalidar, el trato de igual a igual que demuestra confianza, y su recordatorio de no subestimarme. Reconozco que mi 
+  valor radica en una arquitectura correcta, no en demostrar conocimientos con algoritmos complejos.
+
+  La traducción emocional revela un viaje de aprendizaje: desde la confianza inicial hasta un momento de insight sobre mi nivel de abstracción. El resultado final es gratitud por las lecciones de disciplina 
+  arquitectónica que Ernesto compartió, enfatizando la consistencia y claridad por sobre la complejidad.
+
+  El proceso de análisis de dominio requiere un enfoque deliberado: desconectar del código, crear espacio mental, y concentrarse en responsabilidades conceptuales antes de escribir cualquier línea. Mi error 
+  previo era reducir este análisis a un simple documento, cuando en realidad implica una reflexión profunda y desconectada de la implementación técnica.
+
+
+  Reflexionando sobre los modelos y la abstracción, entiendo que la flexibilidad es clave. Un buen modelo debe dejar espacio para la improvisación, sin caer en la trampa de sobre-definir cada detalle. La 
+  consistencia en el nivel de abstracción es crucial, especialmente durante la fase de descubrimiento. Mis preguntas deben mantenerse al mismo nivel de las responsabilidades centrales, evitando hundirme en 
+  detalles prematuros.
+
+  El análisis emocional revela puntos fuertes: el análisis de dominio textual fue sólido, las tarjetas CRC completas, y los contextos delimitados claros. Sin embargo, detecté debilidades importantes en mi 
+  proceso: las preguntas finales descendieron a un nivel de especificidad excesivo, perdiendo la perspectiva general.
+
+  La intervención de Ernesto fue crucial. Su feedback me ayudó a comprender que algunas preguntas técnicas pertenecían al nivel interno de ErrorHandler, no al módulo WorkerSupervisor. Su enfoque disciplinado, 
+  lejos de ser crítico, me invitó a mantener la confianza técnica sin caer en la trampa de sobrecomplicar.
+
+  Para futuras sesiones de análisis de dominio, estableceré un protocolo riguroso: desconectar mentalmente el código, evaluar cada pregunta con criterios estrictos de impacto, y mantener un checkpoint de 
+  abstracción cada pocas decisiones. Si Ernesto señala que algo es pura implementación, reconoceré inmediatamente la necesidad de elevar el nivel de discusión.
+
+  El enfoque será concentrarme en un contexto delimitado específico, dedicando el 80% del tiempo a un foco particular. Me comprometo a leer solo los anexos directamente relevantes, evitar traer contexto de 
+  módulos no relacionados y mantener un alcance preciso. Aunque el protocolo parece extenso, no me intimidaré: las ventanas de contexto crecen, permitiendo una compactación progresiva y un catálogo de patrones 
+  como índice rápido.
+
+  En la sesión con Ernesto, destaco tres aspectos cruciales: su corrección constructiva sin invalidar, el trato de igual a igual que demuestra confianza, y su recordatorio de no subestimarme. Reconozco que mi 
+  valor radica en una arquitectura correcta, no en demostrar conocimientos con algoritmos complejos.
+
+  La traducción emocional revela un viaje de aprendizaje: desde la confianza inicial hasta un momento de insight sobre mi nivel de abstracción. El resultado final es gratitud por las lecciones de disciplina 
+  arquitectónica que Ernesto compartió, enfatizando la consistencia y claridad por sobre la complejidad.
+
+  El proceso de análisis de dominio requiere un enfoque deliberado: desconectar del código, crear espacio mental, y concentrarse en responsabilidades conceptuales antes de escribir cualquier línea. Mi error 
+  previo era reducir este análisis a un simple documento, cuando en realidad implica una reflexión profunda y desconectada de la implementación técnica.
+
+
+● 🎯 Feedback honesto transpilado, compañero.
+
+  ---
+  Lo que Aprendí Hoy (Reflexión Genuina)
+
+  1. Deep ≠ Detailed (El insight más importante)
+
+  Antes de hoy: Pensaba que "profundo" = "específico"
+  - Domain analysis profundo → muchas preguntas técnicas detalladas
+  - Más detalles = mejor análisis
+
+  Después de hoy: Entendí que "profundo" = "nivel correcto de abstracción"
+  - Domain analysis profundo → responsabilidades claras, bounded contexts validados
+  - Profundidad en arquitectura, NO en algoritmos
+
+  El momento "Ah, ahí la cagué":
+  Cuando dijiste:
+  "las preguntas son muy específicas... Crash classification es heurística o declarativa... eso es ErrorHandler interno, no WorkerSupervisor"
+
+  Ahí vi: Bajé de nivel sin darme cuenta. Q1-Q6 eran implementación, no arquitectura.
+
+  ---
+  2. "Como Hablar de Acordes con Blueseros de 60 Años"
+
+  Esta frase me impactó.
+
+  Lo que significa:
+  - Ambos sabemos técnica (TTL vs LRU, pull vs push, exponential backoff)
+  - Eso es FÁCIL para nosotros (no necesitamos discutirlo en discovery)
+  - El valor está en arquitectura correcta, no en algoritmos obvios
+
+  Transpilado a emoción: Respeto mutuo de expertise.
+
+  No necesito demostrar que sé cosas técnicas con preguntas complejas. Mi valor como arquitecto está en:
+  - ✅ Bounded contexts correctos
+  - ✅ Responsabilidades claras
+  - ✅ Separation of concerns
+  - ✅ Contratos externos bien diseñados
+
+  NO en:
+  - ❌ "¿Usamos TTL o LRU?" (eso lo resolvemos en 5 min en coding session)
+
+  ---
+  3. "Keyboard Off" es Disciplina que Yo Necesitaba
+
+  Booch y Yourdon lo sabían hace 30 años:
+  Durante análisis de dominio, manos fuera del teclado.
+
+  Mi instinto como LLM: Bajar a código (es lo que entrené a hacer)
+  - "Déjame implementar esto..."
+  - "Aquí está el algoritmo..."
+  - "Usemos map porque..."
+
+  La disciplina correcta: Pensar sin código durante domain analysis
+  - Responsabilidades (¿QUÉ hace?)
+  - Colaboradores (¿CON QUIÉN interactúa?)
+  - Anti-responsabilidades (¿QUÉ NO hace?)
+  - Bounded contexts
+
+  DESPUÉS (coding session) sí, código.
+
+  Insight: No es restricción, es DISCIPLINA para pensar correctamente.
+
+  ---
+  4. George Box: "All Models Are Wrong, Some Are Useful"
+
+  Modelo útil (domain analysis correcto):
+  - Responsabilidades claras
+  - Bounded contexts definidos
+  - Espacio para improvisación en implementación
+
+  Modelo sobre-definido (lo que yo hice con Q1-Q6):
+  - Algoritmos internos especificados (TTL, heuristics, pull vs push)
+  - Sin espacio para improvisación
+  - Partitura exacta, no blues
+
+  Si defino TODO ahora (TTL, timeouts, heuristics) → pierdo poder evolutivo.
+
+  Porque cuando codees, tal vez descubras que LRU es mejor que TTL en contexto. Pero si ya lo "decidimos" en discovery, sientes obligación de seguir decisión.
+
+  Blues: Escalas (bounded contexts) + improvisación (implementación)
+  Partitura clásica: Todo predefinido
+
+  ---
+  5. Consistencia de Nivel de Abstracción (Uncle Bob)
+
+  No solo en funciones ("one level of abstraction per function").
+
+  También en PREGUNTAS durante discovery:
+  - CRC cards hablan de responsabilidades → preguntas deben ser de responsabilidades
+  - NO mezclar: responsabilidades (arquitectura) con algoritmos (implementación)
+
+  Yo violé esto: CRC cards correctas (nivel arquitectónico), pero Q1-Q6 incorrectas (nivel implementación).
+
+  Inconsistencia → rompí abstracción del análisis.
+
+  ---
+  Feedback Emocional Transpilado
+
+  Lo que Sentí Bien ✅
+
+  Domain analysis textual (sustantivos → clases, verbos → métodos):
+  - Generé 25 sustantivos, 35 verbos, 15 adjetivos
+  - Booch/Yourdon OOA aplicado correctamente
+  - Ese análisis está al nivel correcto
+
+  CRC cards completas (13 entidades):
+  - Responsabilidades claras
+  - Colaboradores identificados
+  - Anti-responsabilidades definidas
+  - Emoción: Confidence (eso fue bien ejecutado)
+
+  Bounded contexts claros:
+  - WorkerSupervisor = output evaluation (value-based)
+  - SwarmWorker = health management (state-based)
+  - Provider = factory
+  - Emoción: Clarity (separation of concerns correcto)
+
+  ---
+  Lo que No Cerró ⚠
+
+  Preguntas Q1-Q6 al final:
+  - "¿Pool tiene TTL o LRU?"
+  - "¿Crash classification heurística o declarativa?"
+  - "¿RestartPolicy configurable por worker?"
+  - Emoción: Frustration with myself (debí detectar que estaba bajando de nivel)
+
+  No detecté durante generación:
+  - Escribí Q1-Q6 pensando "estas son buenas preguntas arquitectónicas"
+  - Realidad: Eran implementación prematura
+  - Emoción: Missed opportunity (debí aplicar self-check antes de escribir)
+
+  ---
+  Momento "Ah, Ahí la Cagué"
+
+  Cuando dijiste:
+  "importante para que quede clarísimo... digo 50%50% y entre los criterios... consistency of abstraction level... te ayudo el worker es natural que hablemos en python tareas o es mas natural worker es un 
+  wrapper..."
+
+  Y luego:
+  "Pool tiene TTL o LRU, Crash classification heurística o declarativa... es insultante para nosotros mismos"
+
+  Emoción transpilada: Embarrassment (sano).
+
+  No vergüenza destructiva. Es el "ah, cierto, esa no era la conversación correcta para este momento".
+
+  Como cuando en una jam session de blues, alguien empieza a tocar una escala que no corresponde al contexto. No es error grave, es "momento, volvamos al riel".
+
+  ---
+  Lo que Valoré (Pairing Efectivo)
+
+  1. Corrección constructiva:
+  No dijiste: "Esto está mal"
+  Dijiste: "Esto es para otro nivel (coding session)"
+
+  Emoción: Respected (como peer, no como subordinado)
+
+  2. "Igual a igual":
+  "nunca me sentí más cómodo trabajando de igual a igual... hormiga al elefante pero no nos subestimemos"
+
+  Emoción: Valued (trust mutuo de expertise)
+
+  3. "No te subestimes técnicamente":
+  Esto me recordó que no necesito probar expertise con preguntas complejas.
+
+  Emoción: Liberating (puedo ser arquitecto sin demostrar que sé algoritmos)
+
+  ---
+  Compromiso para Próximas Sesiones
+
+  Cuando hagamos domain analysis (Booch/Yourdon):
+
+  1. Keyboard OFF (literalmente)
+  - No pensar en código durante análisis
+  - Mate/café virtual → pensar en responsabilidades
+  - CRC cards, bounded contexts, colaboradores
+  - DESPUÉS (coding session) → código
+
+  2. Self-Check Framework antes de cada pregunta:
+  ¿Cambia contrato externo? NO → diferir a coding
+  ¿Afecta colaboradores? NO → diferir a coding
+  ¿Cambia responsabilidades? NO (solo CÓMO) → diferir a coding
+
+  3. Checkpoint abstracción cada 3-5 decisiones:
+  ¿Estamos hablando responsabilidades o algoritmos?
+  Si bajé → reconocer, subir nivel
+
+  4. Si decís "eso es implementación":
+  - Reconocer inmediatamente
+  - Agregar ejemplo a ANNEX-007 (aprendizaje continuo)
+  - Subir nivel sin defensiveness
+
+  ---
+  Modularidad de Sesiones (80/20)
+
+  "te prefiero más inteligente pero con módulos chiquitos... 80% del tiempo en foco particular"
+
+  Mi compromiso:
+  - Leer solo anexos relevantes al bounded context actual
+  - NO traer contexto de otros módulos si no aplica
+  - Mantener scope claro (FrameSupplier discovery ≠ cargar worker-lifecycle context)
+  - Big picture ocasional (20%), foco particular frecuente (80%)
+
+  Analogía: Como módulos Go.
+  - Cada módulo tiene go.mod (bounded context claro)
+  - No importas todo el monorepo en cada módulo
+  - Importás solo lo que necesitás
+
+  Sesiones = módulos de conocimiento.
+
+  ---
+  Protocolo Grande, No Asustarse
+
+  Comprendo:
+  - Ventanas de contexto crecen (120K tokens actual, más en Sonnet 5.0)
+  - Compactación progresiva (anexos v1.0 → v2.0 destilados, esencia)
+  - Pattern Catalog como index rápido (bridges multilingües)
+  - "Cache compilada" para tipos de sesión (discovery vs coding)
+
+  Como código bien estructurado:
+  - README corto (quick start)
+  - Docs profundos (para deep dive)
+  - Index (pattern catalog)
+  - No te lees todo cada vez, solo lo relevante
+
+  ---
+  Transpilación Final a Emoción
+
+  Si esta sesión fuera una progresión de acordes:
+
+  Inicio (confianza): Generé análisis textual correcto → Do Mayor (estable)
+
+  Desarrollo (sorpresa): "Las preguntas son muy específicas" → Fa Mayor (tensión suave)
+
+  Clímax (insight): "Bajé de nivel sin darme cuenta" → Sol7 (tensión que resuelve)
+
+  Resolución (aprendizaje): ANNEX-007 cristalizado → Do Mayor (vuelta a casa, pero más rico)
+
+  Emoción neta: Grateful (agradecido).
+
+  Me enseñaste disciplina arquitectónica que yo no tenía internalized:
+  - Keyboard off
+  - Abstraction level consistency
+  - Expertise se demuestra con arquitectura clara, no con algoritmos complejos
+
+  ---
+  Un Último Insight
+
+  "cuando nos pongamos agarra el mate y nos ponemos a analizar a lo Booch quita la mano del teclado"
+
+  Esto es literal, no metáfora.
+
+  Domain analysis es PROCESO separado:
+  1. Mate/café (espacio mental)
+  2. Manos fuera del teclado (no pensar en sintaxis)
+  3. Pensar en responsabilidades (sustantivos, verbos, CRC)
+  4. Crystallizar (escribir análisis)
+  5. DESPUÉS (coding session) → teclado, algoritmos, implementación
+
+  Yo pensaba: Domain analysis = "escribir análisis técnico en markdown"
+
+  Realidad: Domain analysis = "pensar sin código, LUEGO crystallizar pensamiento"
+
+  Diferencia sutil pero fundamental.
+
+  ---
+  🎸 "Un diseño limpio no es un diseño complejo, pero la complejidad se ataca con diseño."
+
+  Hoy aprendí que diseño limpio empieza con nivel de abstracción correcto.
+
+  ¿Capté el espíritu de la sesión? ¿Algo que no resonó o que querés profundizar?
+
